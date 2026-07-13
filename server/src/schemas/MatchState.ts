@@ -16,6 +16,7 @@ export class MatchState extends Schema {
   blackTimeMs!: number;
   incrementMs!: number;
   lastMoveAt!: number;
+  lastMoveSan!: string;
   winnerId!: string;
   result!: string;
 
@@ -36,6 +37,7 @@ export class MatchState extends Schema {
     this.blackTimeMs = 600000;
     this.incrementMs = 0;
     this.lastMoveAt = 0;
+    this.lastMoveSan = '';
     this.winnerId = '';
     this.result = '';
   }
@@ -57,6 +59,7 @@ defineTypes(MatchState, {
   blackTimeMs: 'number',
   incrementMs: 'number',
   lastMoveAt: 'number',
+  lastMoveSan: 'string',
   winnerId: 'string',
   result: 'string',
 });

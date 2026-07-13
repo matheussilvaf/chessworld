@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { Chess } from 'chess.js';
 import { sendChessMove, sendResign, getWorldRoom } from '../game/network/colyseusClient';
+import { chessAudio, getSoundForSan } from '../game/audio/chessAudio';
 
 interface ChessState {
   matchId: string | null;
@@ -73,6 +74,8 @@ export const useChessStore = create<ChessState>((set, get) => ({
 
     const game = new Chess(matchData.fen || undefined);
 
+    chessAudio.play('startGame');
+
     set({
       matchId,
       boardId: matchData.boardId,
@@ -111,6 +114,8 @@ export const useChessStore = create<ChessState>((set, get) => ({
 
     const game = new Chess(matchData.fen || undefined);
 
+    chessAudio.play('startGame');
+
     set({
       matchId,
       boardId: matchData.boardId,
@@ -137,18 +142,39 @@ export const useChessStore = create<ChessState>((set, get) => ({
   },
 
   syncFromColyseus: (matchData) => {
-    const { matchId, game, playerColor, isSpectating } = get();
+    const { matchId, game, playerColor, isSpectating, gameOver: wasGameOver, turn: prevTurn } = get();
     if (!matchId || !game) return;
     if (matchData.id !== matchId) return;
 
-    game.load(matchData.fen);
+    const newGameOver = matchData.status !== 'playing';
+    const turnChanged = matchData.turn !== prevTurn;
+    const isMyTurn = !isSpectating && !newGameOver && matchData.turn === playerColor;
 
-    const gameOver = matchData.status !== 'playing';
-    const isMyTurn = !isSpectating && !gameOver && matchData.turn === playerColor;
+    const opponentJustMoved = turnChanged && matchData.turn === playerColor;
+    const spectatorSync = isSpectating && turnChanged;
+
+    if ((opponentJustMoved || spectatorSync) && matchData.lastMoveSan) {
+      const sound = getSoundForSan(matchData.lastMoveSan, newGameOver, matchData.result || null);
+      chessAudio.play(sound);
+    }
+
+    if (!wasGameOver && newGameOver) {
+      if (matchData.result === 'checkmate') {
+        if (!opponentJustMoved && !spectatorSync) {
+          chessAudio.play('checkmate');
+        }
+      } else if (matchData.result === 'resign' || matchData.result === 'timeout' || matchData.result === 'abandon') {
+        chessAudio.play('gameOver');
+      } else {
+        chessAudio.play('gameOver');
+      }
+    }
+
+    game.load(matchData.fen);
 
     set({
       isMyTurn,
-      gameOver,
+      gameOver: newGameOver,
       result: matchData.result || null,
       winnerId: matchData.winnerId || null,
       whiteTimeMs: matchData.whiteTimeMs,
@@ -183,9 +209,21 @@ export const useChessStore = create<ChessState>((set, get) => ({
     const piece = game.get(from as any);
     const actualPromotion = promotion || (piece?.type === 'p' && (to[1] === '8' || to[1] === '1') ? 'q' : undefined);
 
-    sendChessMove(matchId, from, to, actualPromotion);
+    const moveResult = game.move({ from, to, promotion: actualPromotion || undefined });
+    if (!moveResult) return;
 
-    set({ selectedSquare: null, validMoves: [] });
+    const isGameOver = game.isGameOver();
+    const sound = getSoundForSan(moveResult.san, isGameOver, isGameOver && game.isCheckmate() ? 'checkmate' : null);
+    chessAudio.play(sound);
+
+    set({
+      selectedSquare: null,
+      validMoves: [],
+      isMyTurn: false,
+      turn: game.turn(),
+    });
+
+    sendChessMove(matchId, from, to, actualPromotion);
   },
 
   resign: () => {
