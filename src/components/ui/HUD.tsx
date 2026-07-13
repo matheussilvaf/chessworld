@@ -1,10 +1,12 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useAuthStore } from '../../stores/authStore';
 import { useGameStore } from '../../stores/gameStore';
+import { useChessStore } from '../../stores/chessStore';
 import { useColyseusStore, type ColyseusPhase } from '../../hooks/useColyseusConnection';
 import { REGIONS } from '../../config/game';
+import { voiceClient } from '../../game/voice/livekitVoiceClient';
 import {
-  User, MessageSquare, Users, Settings, Trophy, Star, LogOut, Mic, Maximize, Minimize,
+  User, MessageSquare, Users, Settings, Trophy, Star, DoorOpen, Mic, Maximize, Minimize,
 } from 'lucide-react';
 
 function getPhaseDisplay(phase: ColyseusPhase): { label: string; color: string; dotColor: string; animate: boolean } {
@@ -25,7 +27,7 @@ function getPhaseDisplay(phase: ColyseusPhase): { label: string; color: string; 
 }
 
 export function HUD() {
-  const { profile, signOut } = useAuthStore();
+  const { profile } = useAuthStore();
   const { region, onlinePlayers, unreadChat, toggleChat, toggleProfile, toggleFriends, toggleSettings, toggleVoiceChat, colyseusBoards, lastEvent } = useGameStore();
   const { phase, sessionId, roomId } = useColyseusStore();
   const [isFullscreen, setIsFullscreen] = useState(!!document.fullscreenElement);
@@ -45,6 +47,20 @@ export function HUD() {
     } else {
       document.documentElement.requestFullscreen().catch(() => {});
     }
+  }, []);
+
+  const handleLeaveGame = useCallback(async () => {
+    const chessState = useChessStore.getState();
+    if (chessState.matchId && !chessState.gameOver && !chessState.isSpectating) {
+      chessState.resign();
+    }
+    chessState.reset();
+
+    if (voiceClient.status === 'connected') {
+      await voiceClient.leave();
+    }
+
+    (useGameStore.setState as any)({ region: null });
   }, []);
 
   return (
@@ -92,7 +108,7 @@ export function HUD() {
             label={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
             className="sm:hidden"
           />
-          <HUDButton icon={<LogOut className="w-4 h-4" />} onClick={signOut} label="Logout" className="hover:bg-red-500/20 hover:text-red-400" />
+          <HUDButton icon={<DoorOpen className="w-4 h-4" />} onClick={handleLeaveGame} label="Leave Game" className="hover:bg-red-500/20 hover:text-red-400" />
         </div>
       </div>
 
