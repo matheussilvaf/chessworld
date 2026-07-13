@@ -116,17 +116,7 @@ export function GameCanvas() {
     if (listenersSetRef.current) return;
 
     const room = getWorldRoom();
-    if (!room) return;
-
-    // Wait for state to be fully synced before accessing collections
-    if (!room.state || !room.state.players || typeof room.state.players.onAdd !== 'function') {
-      console.log('[Colyseus] State not ready yet, waiting for first sync...');
-      room.onStateChange.once(() => {
-        console.log('[Colyseus] State synced, attaching listeners');
-        attachListeners(scene, room);
-      });
-      return;
-    }
+    if (!room || !room.state) return;
 
     attachListeners(scene, room);
   }
@@ -135,8 +125,8 @@ export function GameCanvas() {
     if (listenersSetRef.current) return;
     listenersSetRef.current = true;
 
-    console.log('[Colyseus] room connected');
-    console.log('[Colyseus] state ready');
+    console.log('[Colyseus] Attaching listeners. roomId:', room.roomId, 'sessionId:', room.sessionId);
+    console.log('[Colyseus] State players count:', room.state.players.size, 'boards count:', room.state.boards.size);
 
     // Set movement sender
     scene.setMovementSender((data) => {
