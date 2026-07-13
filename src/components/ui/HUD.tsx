@@ -114,7 +114,7 @@ export function HUD() {
                 players: {onlinePlayers + 1} | boards: {colyseusBoards.length}
               </div>
               {lastEvent && (
-                <div className="text-xs font-mono text-cyan-400 truncate max-w-[200px]">
+                <div className={`text-xs font-mono truncate max-w-[200px] ${lastEvent.includes('invalid') ? 'text-red-400' : 'text-cyan-400'}`}>
                   {lastEvent}
                 </div>
               )}

@@ -6,6 +6,8 @@ import { useAuthStore } from '../stores/authStore';
 import { getWorldRoom, registerBoards, sendMovement } from '../game/network/colyseusClient';
 import { useColyseusStore } from '../hooks/useColyseusConnection';
 import type { WorldScene } from '../game/scenes/WorldScene';
+import type { Room } from 'colyseus.js';
+import type { WorldState, PlayerState, BoardState } from '../game/network/schemas';
 
 export function GameCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -114,52 +116,51 @@ export function GameCanvas() {
     const room = getWorldRoom();
     if (!room) return;
 
-    // State contract diagnostics
-    console.log('[State Contract] room.state:', room.state);
-    console.log('[State Contract] state keys:', room.state ? Object.getOwnPropertyNames(room.state) : 'NO STATE');
-
     if (!room.state) {
-      console.error('[State Contract] room.state is null/undefined - waiting for state sync');
+      console.error('[State Contract] room.state is null/undefined after join');
+      useGameStore.getState().setLastEvent('state null - waiting');
       room.onStateChange.once(() => {
         console.log('[State Contract] State received via onStateChange');
-        logStateContract(room);
-        if (!listenersSetRef.current) {
-          attachListeners(scene, room);
-        }
+        validateAndAttach(scene, room);
       });
       return;
     }
 
-    const players = room.state.players;
-    const boards = room.state.boards;
+    validateAndAttach(scene, room);
+  }
 
-    console.log('[State Contract] players exists:', Boolean(players));
-    console.log('[State Contract] boards exists:', Boolean(boards));
-    console.log('[State Contract] players value:', players);
-    console.log('[State Contract] boards value:', boards);
+  function validateAndAttach(scene: WorldScene, room: Room<WorldState>) {
+    if (listenersSetRef.current) return;
 
-    if (!players || !boards) {
-      console.error('[State Contract] Missing players or boards in room.state');
-      useGameStore.getState().setLastEvent('state invalid: missing collections');
-      room.onStateChange.once(() => {
-        console.log('[State Contract] State updated via onStateChange - retrying');
-        logStateContract(room);
-        if (!listenersSetRef.current && room.state?.players && room.state?.boards) {
-          attachListeners(scene, room);
-        }
-      });
+    const state = room.state;
+    const playersOk = state && state.players && typeof state.players.onAdd === 'function';
+    const boardsOk = state && state.boards && typeof state.boards.onAdd === 'function';
+
+    console.log(`[State Contract] Validating state contract:`);
+    console.log(`[State Contract]   players exists: ${Boolean(state?.players)}`);
+    console.log(`[State Contract]   players has onAdd: ${playersOk}`);
+    console.log(`[State Contract]   boards exists: ${Boolean(state?.boards)}`);
+    console.log(`[State Contract]   boards has onAdd: ${boardsOk}`);
+    console.log(`[State Contract]   matches exists: ${Boolean(state?.matches)}`);
+
+    if (!playersOk || !boardsOk) {
+      console.error('[State Contract] INVALID - players or boards missing onAdd method');
+      console.error('[State Contract] Frontend connected, but Colyseus schema contract is invalid.');
+      console.error('[State Contract] This usually means client/server schema version mismatch.');
+      useGameStore.getState().setLastEvent('Colyseus state invalid');
       return;
     }
 
     attachListeners(scene, room);
   }
 
-  function attachListeners(scene: WorldScene, room: any) {
+  function attachListeners(scene: WorldScene, room: Room<WorldState>) {
     if (listenersSetRef.current) return;
     listenersSetRef.current = true;
 
+    const state = room.state;
     console.log('[Colyseus] Attaching listeners. roomId:', room.roomId, 'sessionId:', room.sessionId);
-    console.log('[Colyseus] Initial players count:', room.state.players.size, '| boards count:', room.state.boards.size);
+    console.log('[Colyseus] Initial players:', state.players.size, '| boards:', state.boards.size);
 
     scene.setMovementSender((data) => {
       sendMovement(data);
@@ -168,14 +169,14 @@ export function GameCanvas() {
     const arenas = scene.getArenas();
     if (arenas.length > 0) {
       const payload = arenas.map(a => ({ id: a.id, name: a.title, x: a.x, y: a.y, width: a.width, height: a.height }));
-      console.log('[Boards] Sending register_boards payload:', payload.length, 'boards');
+      console.log('[Boards] Sending register_boards:', payload.length, 'boards');
       registerBoards(payload);
     }
 
     // --- Players ---
-    room.state.players.onAdd((player: any, sessionId: string) => {
+    state.players.onAdd((player: PlayerState, sessionId: string) => {
       if (sessionId === room.sessionId) {
-        console.log('[Players] Local player in state:', sessionId);
+        console.log(`[Players] Local player in state: ${sessionId}`);
         updateOnlineCount(room);
         return;
       }
@@ -209,31 +210,35 @@ export function GameCanvas() {
       updateOnlineCount(room);
     });
 
-    room.state.players.onRemove((_player: any, sessionId: string) => {
+    state.players.onRemove((_player: PlayerState, sessionId: string) => {
       console.log(`[Players] Remote player removed: ${sessionId}`);
       scene.handlePlayerLeftBySession(sessionId);
       updateOnlineCount(room);
     });
 
     // --- Boards ---
-    room.state.boards.onAdd((board: any, boardId: string) => {
-      console.log(`[Boards] Board added to state: ${boardId} status=${board.status}`);
+    state.boards.onAdd((board: BoardState, boardId: string) => {
+      console.log(`[Boards] Board added: ${boardId} status=${board.status}`);
       updateBoardVisual(scene, board);
-      useGameStore.getState().setColyseusBoards(getBoardsSnapshot(room));
+      syncBoardsToStore(room);
 
       board.onChange(() => {
         console.log(`[Boards] Board changed: ${boardId} -> ${board.status}`);
         updateBoardVisual(scene, board);
-        useGameStore.getState().setColyseusBoards(getBoardsSnapshot(room));
+        syncBoardsToStore(room);
       });
     });
 
-    room.state.boards.onRemove((_board: any, boardId: string) => {
+    state.boards.onRemove((_board: BoardState, boardId: string) => {
       console.log(`[Boards] Board removed: ${boardId}`);
-      useGameStore.getState().setColyseusBoards(getBoardsSnapshot(room));
+      syncBoardsToStore(room);
     });
 
     // --- Messages ---
+    room.onMessage('state_contract', (data: any) => {
+      console.log(`[Client Contract] received state_contract message:`, data);
+    });
+
     room.onMessage('match_started', (data: any) => {
       console.log(`[Colyseus] match_started: matchId=${data.matchId} boardId=${data.boardId} color=${data.color}`);
       useGameStore.getState().setMatchStartedInfo(data);
@@ -260,7 +265,7 @@ export function GameCanvas() {
       });
     });
 
-    useGameStore.getState().setColyseusBoards(getBoardsSnapshot(room));
+    syncBoardsToStore(room);
     updateOnlineCount(room);
     useGameStore.getState().setLastEvent('listeners attached');
     console.log('[Colyseus] All listeners attached successfully');
@@ -275,21 +280,13 @@ export function GameCanvas() {
   );
 }
 
-function logStateContract(room: any) {
-  console.log('[State Contract] room.state:', room.state);
-  console.log('[State Contract] players exists:', Boolean(room.state?.players));
-  console.log('[State Contract] boards exists:', Boolean(room.state?.boards));
-  if (room.state?.players) console.log('[State Contract] players.size:', room.state.players.size);
-  if (room.state?.boards) console.log('[State Contract] boards.size:', room.state.boards.size);
-}
-
-function updateOnlineCount(room: any) {
+function updateOnlineCount(room: Room<WorldState>) {
   if (!room.state?.players) return;
   const count = room.state.players.size;
   useGameStore.getState().setOnlinePlayers(Math.max(0, count - 1));
 }
 
-function updateBoardVisual(scene: WorldScene, board: any) {
+function updateBoardVisual(scene: WorldScene, board: BoardState) {
   if (board.status === 'waiting') {
     scene.updateBoardStatus(board.id, 'waiting', {
       playerName: board.waitingPlayerName,
@@ -302,10 +299,10 @@ function updateBoardVisual(scene: WorldScene, board: any) {
   }
 }
 
-function getBoardsSnapshot(room: any): any[] {
+function syncBoardsToStore(room: Room<WorldState>) {
+  if (!room.state?.boards) return;
   const boards: any[] = [];
-  if (!room.state?.boards) return boards;
-  room.state.boards.forEach((board: any, id: string) => {
+  room.state.boards.forEach((board: BoardState, id: string) => {
     boards.push({
       id,
       name: board.name,
@@ -318,5 +315,5 @@ function getBoardsSnapshot(room: any): any[] {
       timeLabel: board.timeLabel,
     });
   });
-  return boards;
+  useGameStore.getState().setColyseusBoards(boards);
 }

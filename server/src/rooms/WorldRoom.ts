@@ -264,6 +264,19 @@ export class WorldRoom extends Room<WorldState> {
     this.state.players.set(client.sessionId, player);
     console.log(`[WorldRoom] Player joined: ${player.username} | sessionId: ${client.sessionId} | players count: ${this.state.players.size} | roomId: ${this.roomId}`);
     console.log(`[WorldRoom] boards count: ${this.state.boards.size}`);
+
+    client.send('state_contract', {
+      hasState: true,
+      hasPlayers: Boolean(this.state.players),
+      hasBoards: Boolean(this.state.boards),
+      hasMatches: Boolean(this.state.matches),
+      playersCount: this.state.players.size,
+      boardsCount: this.state.boards.size,
+      sessionId: client.sessionId,
+      roomId: this.roomId,
+      schemaVersion: '2.x',
+      coreVersion: '0.15.x',
+    });
   }
 
   onLeave(client: Client) {

@@ -1,4 +1,5 @@
 import { Client, Room } from 'colyseus.js';
+import { WorldState } from './schemas';
 
 const COLYSEUS_URL = import.meta.env.VITE_COLYSEUS_URL || '';
 
@@ -19,9 +20,9 @@ function getClient(): Client {
   return client;
 }
 
-let worldRoom: Room | null = null;
+let worldRoom: Room<WorldState> | null = null;
 
-export function getWorldRoom(): Room | null {
+export function getWorldRoom(): Room<WorldState> | null {
   return worldRoom;
 }
 
@@ -32,19 +33,31 @@ export async function joinWorldRoom(options: {
   region: string;
   x: number;
   y: number;
-}): Promise<Room> {
+}): Promise<Room<WorldState>> {
   if (!isColyseusConfigured()) {
     throw new Error('VITE_COLYSEUS_URL is not configured');
   }
 
   console.log(`[Colyseus] joining world region: ${options.region}`);
-  worldRoom = await getClient().joinOrCreate('world', options);
-  console.log(`[Colyseus] joined roomId: ${worldRoom.roomId}`);
-  console.log(`[Colyseus] sessionId: ${worldRoom.sessionId}`);
-  console.log(`[State Contract] room.state:`, worldRoom.state);
-  console.log(`[State Contract] state keys:`, worldRoom.state ? Object.getOwnPropertyNames(worldRoom.state) : 'NO STATE');
-  console.log(`[State Contract] players exists:`, Boolean(worldRoom.state?.players));
-  console.log(`[State Contract] boards exists:`, Boolean(worldRoom.state?.boards));
+  console.log(`[Client Contract] colyseus.js version: 0.15.28`);
+  console.log(`[Client Contract] @colyseus/schema version: 2.x (explicit schemas)`);
+
+  worldRoom = await getClient().joinOrCreate<WorldState>('world', options, WorldState);
+
+  console.log(`[Client Contract] roomId: ${worldRoom.roomId}`);
+  console.log(`[Client Contract] sessionId: ${worldRoom.sessionId}`);
+  console.log(`[Client Contract] raw room.state:`, worldRoom.state);
+  console.log(`[Client Contract] players exists: ${Boolean(worldRoom.state?.players)}`);
+  console.log(`[Client Contract] boards exists: ${Boolean(worldRoom.state?.boards)}`);
+  console.log(`[Client Contract] matches exists: ${Boolean(worldRoom.state?.matches)}`);
+
+  if (worldRoom.state?.players) {
+    console.log(`[Client Contract] players.size: ${worldRoom.state.players.size}`);
+  }
+  if (worldRoom.state?.boards) {
+    console.log(`[Client Contract] boards.size: ${worldRoom.state.boards.size}`);
+  }
+
   return worldRoom;
 }
 
@@ -108,5 +121,5 @@ export function sendChat(message: string) {
 
 export function registerBoards(boards: { id: string; name: string; x: number; y: number; width?: number; height?: number }[]) {
   worldRoom?.send('register_boards', { boards });
-  console.log(`[Boards] boards registered: ${boards.length}`);
+  console.log(`[Boards] register_boards sent: ${boards.length} boards`);
 }
