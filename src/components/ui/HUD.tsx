@@ -26,8 +26,8 @@ function getPhaseDisplay(phase: ColyseusPhase): { label: string; color: string; 
 
 export function HUD() {
   const { profile, signOut } = useAuthStore();
-  const { region, onlinePlayers, unreadChat, toggleChat, toggleProfile, toggleFriends, toggleSettings, toggleVoiceChat } = useGameStore();
-  const { phase } = useColyseusStore();
+  const { region, onlinePlayers, unreadChat, toggleChat, toggleProfile, toggleFriends, toggleSettings, toggleVoiceChat, colyseusBoards, lastEvent } = useGameStore();
+  const { phase, sessionId, roomId } = useColyseusStore();
   const [isFullscreen, setIsFullscreen] = useState(!!document.fullscreenElement);
 
   const regionInfo = REGIONS.find(r => r.id === region);
@@ -96,13 +96,30 @@ export function HUD() {
         </div>
       </div>
 
-      {/* Colyseus status indicator */}
+      {/* Colyseus debug panel */}
       <div className="absolute bottom-4 left-4 pointer-events-auto">
-        <div className="bg-slate-900/90 backdrop-blur-sm rounded-lg px-3 py-1.5 border border-slate-700/50 flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${display.dotColor} ${display.animate ? 'animate-pulse' : ''}`} />
-          <span className={`text-xs font-mono ${display.color}`}>
-            Colyseus: {display.label}
-          </span>
+        <div className="bg-slate-900/90 backdrop-blur-sm rounded-lg px-3 py-2 border border-slate-700/50 space-y-1">
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${display.dotColor} ${display.animate ? 'animate-pulse' : ''}`} />
+            <span className={`text-xs font-mono ${display.color}`}>
+              Colyseus: {display.label}
+            </span>
+          </div>
+          {phase === 'connected' && (
+            <>
+              <div className="text-xs font-mono text-slate-500">
+                room: {roomId?.slice(0, 8)} | session: {sessionId?.slice(0, 8)}
+              </div>
+              <div className="text-xs font-mono text-slate-400">
+                players: {onlinePlayers + 1} | boards: {colyseusBoards.length}
+              </div>
+              {lastEvent && (
+                <div className="text-xs font-mono text-cyan-400 truncate max-w-[200px]">
+                  {lastEvent}
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
     </div>

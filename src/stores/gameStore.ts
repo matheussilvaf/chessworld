@@ -1,9 +1,23 @@
 import { create } from 'zustand';
 import { supabase } from '../lib/supabase';
-import { sendChatMessage } from '../game/network/socketClient';
+import { sendChat as colyseusSendChat } from '../game/network/colyseusClient';
 import type { Board, House, PlayerPresence, Match, ChatMessage } from '../types';
 import type { Region } from '../config/game';
 import { GAME_CONFIG } from '../config/game';
+
+interface ColyseusBoardInfo {
+  id: string;
+  name: string;
+  status: string;
+  waitingPlayerId: string;
+  waitingPlayerName: string;
+}
+
+interface MatchStartedInfo {
+  matchId: string;
+  boardId: string;
+  color: 'w' | 'b';
+}
 
 interface GameState {
   region: Region | null;
@@ -24,6 +38,9 @@ interface GameState {
   showVoiceChat: boolean;
   boardLocked: boolean;
   unreadChat: number;
+  colyseusBoards: ColyseusBoardInfo[];
+  matchStartedInfo: MatchStartedInfo | null;
+  lastEvent: string;
 
   setRegion: (region: Region) => void;
   setPlayerPosition: (pos: { x: number; y: number }) => void;
@@ -38,6 +55,9 @@ interface GameState {
   setSelectedBoard: (board: Board | null) => void;
   setSelectedHouse: (house: House | null) => void;
   setBoardLocked: (locked: boolean) => void;
+  setColyseusBoards: (boards: ColyseusBoardInfo[]) => void;
+  setMatchStartedInfo: (info: MatchStartedInfo | null) => void;
+  setLastEvent: (event: string) => void;
   toggleChat: () => void;
   toggleProfile: () => void;
   toggleFriends: () => void;
@@ -71,6 +91,9 @@ export const useGameStore = create<GameState>((set, get) => ({
   showVoiceChat: false,
   boardLocked: false,
   unreadChat: 0,
+  colyseusBoards: [],
+  matchStartedInfo: null,
+  lastEvent: '',
 
   setRegion: (region) => set({ region }),
   setPlayerPosition: (pos) => set({ playerPosition: pos }),
@@ -85,6 +108,9 @@ export const useGameStore = create<GameState>((set, get) => ({
   setSelectedBoard: (board) => set({ selectedBoard: board }),
   setSelectedHouse: (house) => set({ selectedHouse: house }),
   setBoardLocked: (locked) => set({ boardLocked: locked }),
+  setColyseusBoards: (boards) => set({ colyseusBoards: boards }),
+  setMatchStartedInfo: (info) => set({ matchStartedInfo: info, lastEvent: info ? `Match started: ${info.matchId.slice(0, 8)}` : '' }),
+  setLastEvent: (event) => set({ lastEvent: event }),
   toggleChat: () => set((s) => ({ showChat: !s.showChat, unreadChat: !s.showChat ? 0 : s.unreadChat })),
   toggleProfile: () => set((s) => ({ showProfile: !s.showProfile })),
   toggleFriends: () => set((s) => ({ showFriends: !s.showFriends })),
@@ -137,9 +163,9 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (data) set({ chatMessages: data.reverse() });
   },
 
-  sendChat: async (message, userId, username) => {
+  sendChat: async (message, _userId, _username) => {
     const { region } = get();
     if (!region || !message.trim()) return;
-    sendChatMessage({ region, playerId: userId, username, message: message.trim() });
+    colyseusSendChat(message.trim());
   },
 }));

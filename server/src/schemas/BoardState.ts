@@ -6,6 +6,8 @@ export class BoardState extends Schema {
   region: string = '';
   x: number = 0;
   y: number = 0;
+  width: number = 80;
+  height: number = 80;
   status: string = 'idle';
   waitingPlayerId: string = '';
   waitingPlayerName: string = '';
@@ -20,6 +22,8 @@ defineTypes(BoardState, {
   region: 'string',
   x: 'number',
   y: 'number',
+  width: 'number',
+  height: 'number',
   status: 'string',
   waitingPlayerId: 'string',
   waitingPlayerName: 'string',

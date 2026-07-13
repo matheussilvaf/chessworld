@@ -18,13 +18,24 @@ interface JoinOptions {
 const activeGames = new Map<string, Chess>();
 
 export class WorldRoom extends Room<WorldState> {
-  private tickInterval!: ReturnType<typeof setInterval>;
   private readonly TICK_RATE = 20;
 
   onCreate() {
     this.setState(new WorldState());
     this.setSimulationInterval(() => this.tick(), 1000 / this.TICK_RATE);
     this.maxClients = 100;
+
+    this.onMessage('move_to', (client, data) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+
+      player.x = data.x;
+      player.y = data.y;
+      player.targetX = data.targetX;
+      player.targetY = data.targetY;
+      player.direction = data.direction;
+      player.isMoving = data.isMoving;
+    });
 
     this.onMessage('movement', (client, data) => {
       const player = this.state.players.get(client.sessionId);
@@ -39,7 +50,8 @@ export class WorldRoom extends Room<WorldState> {
     });
 
     this.onMessage('register_boards', (_client, data) => {
-      const { boards } = data as { boards: { id: string; name: string; x: number; y: number }[] };
+      const { boards } = data as { boards: { id: string; name: string; x: number; y: number; width?: number; height?: number }[] };
+      let registered = 0;
       for (const b of boards) {
         if (!this.state.boards.has(b.id)) {
           const board = new BoardState();
@@ -47,14 +59,17 @@ export class WorldRoom extends Room<WorldState> {
           board.name = b.name;
           board.x = b.x;
           board.y = b.y;
+          board.width = b.width || 80;
+          board.height = b.height || 80;
           board.status = 'idle';
           this.state.boards.set(b.id, board);
+          registered++;
         }
       }
-      console.log(`[WorldRoom] Registered ${boards.length} boards`);
+      console.log(`[WorldRoom] Registered ${registered} new boards (total: ${this.state.boards.size})`);
     });
 
-    this.onMessage('board_join', (client, data) => {
+    this.onMessage('join_board', (client, data) => {
       const { boardId, playerName } = data as { boardId: string; playerName: string };
       const player = this.state.players.get(client.sessionId);
       if (!player) return;
@@ -62,15 +77,18 @@ export class WorldRoom extends Room<WorldState> {
       const board = this.state.boards.get(boardId);
       if (!board) {
         client.send('error', { message: 'Board not found' });
+        console.log(`[WorldRoom] join_board: board ${boardId} not found`);
         return;
       }
+
+      console.log(`[WorldRoom] join_board received: player=${playerName} board=${boardId} currentStatus=${board.status}`);
 
       if (board.status === 'idle') {
         board.status = 'waiting';
         board.waitingPlayerId = player.id;
         board.waitingPlayerName = playerName;
-        this.broadcast('board_update', { boardId, status: 'waiting', waitingPlayerId: player.id, waitingPlayerName: playerName });
-        console.log(`[WorldRoom] ${playerName} waiting at board ${boardId}`);
+        player.currentBoardId = boardId;
+        console.log(`[WorldRoom] Board ${boardId} status -> waiting (player: ${playerName})`);
       } else if (board.status === 'waiting') {
         if (board.waitingPlayerId === player.id) {
           client.send('error', { message: 'Already waiting here' });
@@ -78,11 +96,11 @@ export class WorldRoom extends Room<WorldState> {
         }
         this.startMatch(board, player, client);
       } else {
-        client.send('error', { message: 'Board in match' });
+        client.send('error', { message: 'Board already in match' });
       }
     });
 
-    this.onMessage('board_cancel', (client, data) => {
+    this.onMessage('cancel_waiting', (client, data) => {
       const { boardId } = data as { boardId: string };
       const player = this.state.players.get(client.sessionId);
       if (!player) return;
@@ -93,7 +111,8 @@ export class WorldRoom extends Room<WorldState> {
       board.status = 'idle';
       board.waitingPlayerId = '';
       board.waitingPlayerName = '';
-      this.broadcast('board_update', { boardId, status: 'idle' });
+      player.currentBoardId = '';
+      console.log(`[WorldRoom] Board ${boardId} status -> idle (cancelled by ${player.username})`);
     });
 
     this.onMessage('chess_move', (client, data) => {
@@ -198,36 +217,35 @@ export class WorldRoom extends Room<WorldState> {
 
   onJoin(client: Client, options: JoinOptions) {
     const player = new PlayerState();
-    player.id = options.playerId;
+    player.id = options.playerId || client.sessionId;
     player.sessionId = client.sessionId;
-    player.username = options.username;
-    player.rating = options.rating;
-    player.region = options.region;
-    player.x = options.x;
-    player.y = options.y;
-    player.targetX = options.x;
-    player.targetY = options.y;
+    player.username = options.username || 'Anonymous';
+    player.rating = options.rating || 1200;
+    player.region = options.region || 'default';
+    player.x = options.x || 800;
+    player.y = options.y || 640;
+    player.targetX = player.x;
+    player.targetY = player.y;
     player.direction = 'down';
     player.isMoving = false;
 
     this.state.players.set(client.sessionId, player);
-    console.log(`[WorldRoom] ${options.username} joined (${this.state.players.size} players)`);
+    console.log(`[WorldRoom] Player joined: ${player.username} (${this.state.players.size} total)`);
   }
 
   onLeave(client: Client) {
     const player = this.state.players.get(client.sessionId);
     if (player) {
-      // Clean up boards where this player was waiting
-      this.state.boards.forEach((board, boardId) => {
+      this.state.boards.forEach((board) => {
         if (board.waitingPlayerId === player.id) {
           board.status = 'idle';
           board.waitingPlayerId = '';
           board.waitingPlayerName = '';
-          this.broadcast('board_update', { boardId, status: 'idle' });
+          console.log(`[WorldRoom] Board ${board.id} freed (player ${player.username} left)`);
         }
       });
 
-      console.log(`[WorldRoom] ${player.username} left`);
+      console.log(`[WorldRoom] Player left: ${player.username} (${this.state.players.size - 1} remaining)`);
       this.state.players.delete(client.sessionId);
     }
   }
@@ -237,10 +255,7 @@ export class WorldRoom extends Room<WorldState> {
     activeGames.clear();
   }
 
-  private tick() {
-    // State is automatically synced by Colyseus schema
-    // Additional tick logic can go here if needed
-  }
+  private tick() {}
 
   private startMatch(board: BoardState, joiningPlayer: PlayerState, joiningClient: Client) {
     const matchId = nanoid();
@@ -267,7 +282,8 @@ export class WorldRoom extends Room<WorldState> {
     board.waitingPlayerId = '';
     board.waitingPlayerName = '';
 
-    // Notify both players
+    joiningPlayer.currentBoardId = board.id;
+
     const whiteSessionId = this.findSessionByPlayerId(match.whitePlayerId);
     if (whiteSessionId) {
       const whiteClient = this.clients.find(c => c.sessionId === whiteSessionId);
@@ -275,8 +291,8 @@ export class WorldRoom extends Room<WorldState> {
     }
     joiningClient.send('match_started', { matchId, boardId: board.id, color: 'b' });
 
-    this.broadcast('board_update', { boardId: board.id, status: 'playing' });
-    console.log(`[WorldRoom] Match ${matchId} started`);
+    console.log(`[WorldRoom] Match started: ${matchId} on board ${board.id}`);
+    console.log(`[WorldRoom] Board ${board.id} status -> playing`);
   }
 
   private finishMatch(matchId: string, winnerId: string, reason: string) {
@@ -286,19 +302,16 @@ export class WorldRoom extends Room<WorldState> {
     match.status = 'finished';
     activeGames.delete(matchId);
 
-    // Reset board
     const board = this.state.boards.get(match.boardId);
     if (board) {
       board.status = 'idle';
       board.whitePlayerId = '';
       board.blackPlayerId = '';
       board.matchId = '';
-      this.broadcast('board_update', { boardId: board.id, status: 'idle' });
     }
 
     this.broadcast('match_finished', { matchId, winnerId, reason });
 
-    // Clean up match after a delay
     setTimeout(() => {
       this.state.matches.delete(matchId);
     }, 5000);

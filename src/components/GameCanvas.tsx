@@ -3,20 +3,17 @@ import Phaser from 'phaser';
 import { createPhaserGame, getWorldScene } from '../game/PhaserGame';
 import { useGameStore } from '../stores/gameStore';
 import { useAuthStore } from '../stores/authStore';
-import { useChessStore } from '../stores/chessStore';
-import { supabase } from '../lib/supabase';
-import {
-  socket, connectSocket, joinWorld, registerBoards,
-} from '../game/network/socketClient';
-import type { PlayerState, BoardState, MatchState } from '../game/network/types';
+import { getWorldRoom, registerBoards, sendMovement } from '../game/network/colyseusClient';
+import { useColyseusStore } from '../hooks/useColyseusConnection';
 
 export function GameCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
   const sceneReadyRef = useRef(false);
-  const { region, setCurrentMatch, setSelectedBoard, setBoardLocked } = useGameStore();
+  const listenersSetRef = useRef(false);
+  const { setSelectedBoard, setBoardLocked } = useGameStore();
   const { user, profile } = useAuthStore();
-  const { initMatch } = useChessStore();
+  const { region } = useGameStore();
 
   useEffect(() => {
     if (!containerRef.current || gameRef.current) return;
@@ -42,197 +39,31 @@ export function GameCanvas() {
         const state = useGameStore.getState();
         if (state.selectedBoard || state.boardLocked) return;
 
-        scene.lockMovement(arenaId);
-        setBoardLocked(true);
-
-        supabase
-          .from('boards')
-          .upsert(
-            { region, name: arenaTitle, x: 0, y: 0, status: 'free' },
-            { onConflict: 'region,name', ignoreDuplicates: true }
-          )
-          .then(() => {
-            return supabase
-              .from('boards')
-              .select('*')
-              .eq('region', region)
-              .eq('name', arenaTitle)
-              .single();
-          })
-          .then(({ data }) => {
-            if (data) {
-              setSelectedBoard(data);
-
-              if (data.status === 'waiting' && data.waiting_user_id !== user.id) {
-                scene.movePlayerToBoard(arenaId, 'right');
-              }
-            } else {
-              setBoardLocked(false);
-              scene.unlockMovement();
-            }
-          });
+        setSelectedBoard({
+          id: arenaId,
+          name: arenaTitle,
+          region,
+          x: 0,
+          y: 0,
+          status: 'free',
+          waiting_user_id: null,
+          current_match_id: null,
+          time_minutes: null,
+          increment_seconds: null,
+          created_at: '',
+          updated_at: '',
+        } as any);
       };
 
       scene.onPositionUpdate = () => {};
 
-      connectSocket();
-
-      socket.on('connect', () => {
-        if (user && profile && region) {
-          const pos = scene.getPlayerPosition();
-          joinWorld({
-            playerId: user.id,
-            username: profile.username,
-            rating: profile.rating,
-            region,
-            x: pos.x,
-            y: pos.y,
-          });
-
-          const arenas = scene.getArenas();
-          if (arenas.length > 0) {
-            registerBoards({
-              region,
-              boards: arenas.map(a => ({ id: a.id, name: a.title, x: a.x, y: a.y })),
-            });
-          }
-        }
-      });
-
-      if (socket.connected && user && profile && region) {
-        const pos = scene.getPlayerPosition();
-        joinWorld({
-          playerId: user.id,
-          username: profile.username,
-          rating: profile.rating,
-          region,
-          x: pos.x,
-          y: pos.y,
-        });
-        const arenas = scene.getArenas();
-        if (arenas.length > 0) {
-          registerBoards({ region, boards: arenas.map(a => ({ id: a.id, name: a.title, x: a.x, y: a.y })) });
-        }
-      }
-
-      socket.on('world_state', (payload: { players: PlayerState[]; boards: BoardState[] }) => {
-        scene.handlePlayerSnapshot(payload.players);
-      });
-
-      socket.on('player_snapshot', (players: PlayerState[]) => {
-        scene.handlePlayerSnapshot(players);
-      });
-
-      socket.on('player_joined', (player: PlayerState) => {
-        scene.handlePlayerJoined(player);
-      });
-
-      socket.on('player_left', (payload: { playerId: string }) => {
-        scene.handlePlayerLeft(payload.playerId);
-      });
-
-      socket.on('board_state_update', (board: BoardState) => {
-        useGameStore.getState().setBoards(
-          useGameStore.getState().boards.map(b => b.id === board.id ? { ...b, status: board.status === 'idle' ? 'free' : board.status === 'waiting' ? 'waiting' : 'in_match' } : b)
-        );
-      });
-
-      socket.on('board_waiting', (_payload) => {});
-
-      socket.on('match_started', (match: MatchState) => {
-        if (!user) return;
-        const matchData = {
-          id: match.id,
-          region: match.region,
-          board_id: match.boardId,
-          white_user_id: match.whitePlayerId,
-          black_user_id: match.blackPlayerId,
-          current_fen: match.fen,
-          pgn: match.pgn,
-          status: 'playing',
-          winner_user_id: null,
-          result: null,
-          turn: match.turn,
-          time_minutes: 10,
-          increment_seconds: 0,
-          white_time_ms: 600000,
-          black_time_ms: 600000,
-          last_move_at: new Date().toISOString(),
-          created_at: new Date().toISOString(),
-          finished_at: null,
-        };
-        setCurrentMatch(matchData);
-        initMatch(matchData, user.id);
-        setBoardLocked(false);
-        scene.unlockMovement();
-      });
-
-      socket.on('chess_state_update', (payload) => {
-        useChessStore.getState().syncFen(payload.fen, payload.turn);
-      });
-
-      socket.on('chess_match_finished', (payload) => {
-        console.log(`[Socket] match_finished: ${payload.matchId} (${payload.reason})`);
-        useGameStore.getState().setCurrentMatch(null);
-      });
-
-      socket.on('error', (payload) => {
-        console.warn(`[Socket] Error: ${payload.message}`);
-      });
-
-      // Register global callback for broadcast-based board status updates
-      window.__updateBoardStatusInScene = (boardName: string, status: string) => {
-        scene.updateBoardStatus(boardName, status);
-      };
-
-      // Subscribe to board status changes for visual indicators
-      const unsubscribe = useGameStore.subscribe((state, prevState) => {
-        if (prevState.boardLocked && !state.boardLocked && !state.selectedBoard) {
-          scene.unlockMovement();
-        }
-        if (prevState.selectedBoard && !state.selectedBoard && !state.boardLocked) {
-          scene.unlockMovement();
-        }
-
-        if (state.boards !== prevState.boards) {
-          state.boards.forEach(board => {
-            scene.updateBoardStatus(board.name, board.status);
-          });
-        }
-      });
-
-      // Initial board status update + retry after boards load
-      const pushBoardStatuses = () => {
-        const currentBoards = useGameStore.getState().boards;
-        currentBoards.forEach(board => {
-          scene.updateBoardStatus(board.name, board.status);
-        });
-      };
-      pushBoardStatuses();
-      setTimeout(pushBoardStatuses, 2000);
-      setTimeout(pushBoardStatuses, 5000);
-
-      (containerRef.current as any).__unsubscribe = unsubscribe;
+      setupColyseusListeners(scene);
     };
 
     setTimeout(setupScene, 500);
 
     return () => {
-      socket.off('world_state');
-      socket.off('player_snapshot');
-      socket.off('player_joined');
-      socket.off('player_left');
-      socket.off('board_state_update');
-      socket.off('board_waiting');
-      socket.off('match_started');
-      socket.off('chess_state_update');
-      socket.off('chess_match_finished');
-      socket.off('error');
-
-      if ((containerRef.current as any)?.__unsubscribe) {
-        (containerRef.current as any).__unsubscribe();
-      }
-
+      listenersSetRef.current = false;
       if (gameRef.current) {
         gameRef.current.destroy(true);
         gameRef.current = null;
@@ -241,6 +72,133 @@ export function GameCanvas() {
     };
   }, []);
 
+  // Watch for Colyseus connection and attach listeners
+  useEffect(() => {
+    if (!sceneReadyRef.current || !gameRef.current) return;
+
+    const unsubColyseus = useColyseusStore.subscribe((state, prev) => {
+      if (state.connected && !prev.connected && gameRef.current) {
+        const scene = getWorldScene(gameRef.current);
+        if (scene) setupColyseusListeners(scene);
+      }
+    });
+
+    // If already connected
+    if (useColyseusStore.getState().connected && gameRef.current) {
+      const scene = getWorldScene(gameRef.current);
+      if (scene) setupColyseusListeners(scene);
+    }
+
+    return () => unsubColyseus();
+  }, []);
+
+  function setupColyseusListeners(scene: ReturnType<typeof getWorldScene>) {
+    if (!scene || listenersSetRef.current) return;
+
+    const room = getWorldRoom();
+    if (!room) return;
+
+    listenersSetRef.current = true;
+    console.log('[Colyseus] Setting up state listeners');
+
+    // Register boards from map
+    const arenas = scene.getArenas();
+    if (arenas.length > 0) {
+      registerBoards(arenas.map(a => ({ id: a.id, name: a.title, x: a.x, y: a.y, width: a.width, height: a.height })));
+      console.log(`[Colyseus] Registered ${arenas.length} boards`);
+    }
+
+    // Override the movement emitter to use Colyseus
+    scene.setMovementSender((data) => {
+      sendMovement(data);
+    });
+
+    // Listen to player state changes
+    room.state.players.onAdd((player: any, sessionId: string) => {
+      if (sessionId === room.sessionId) return;
+      console.log(`[RemotePlayers] Player added: ${player.username} (${sessionId})`);
+
+      scene.handlePlayerJoined({
+        id: player.id,
+        socketId: sessionId,
+        username: player.username,
+        rating: player.rating,
+        region: player.region,
+        x: player.x,
+        y: player.y,
+        targetX: player.targetX,
+        targetY: player.targetY,
+        direction: player.direction,
+        isMoving: player.isMoving,
+      });
+
+      player.onChange(() => {
+        if (sessionId === room.sessionId) return;
+        scene.updateRemotePlayerState(sessionId, {
+          x: player.x,
+          y: player.y,
+          targetX: player.targetX,
+          targetY: player.targetY,
+          direction: player.direction,
+          isMoving: player.isMoving,
+        });
+      });
+
+      updateOnlineCount(room);
+    });
+
+    room.state.players.onRemove((_player: any, sessionId: string) => {
+      console.log(`[RemotePlayers] Player removed: ${sessionId}`);
+      scene.handlePlayerLeftBySession(sessionId);
+      updateOnlineCount(room);
+    });
+
+    // Listen to board state changes
+    room.state.boards.onAdd((board: any, boardId: string) => {
+      console.log(`[Boards] Board synced: ${boardId} status=${board.status}`);
+      updateBoardVisual(scene, board);
+
+      board.onChange(() => {
+        console.log(`[Boards] Board updated: ${boardId} status=${board.status}`);
+        updateBoardVisual(scene, board);
+        useGameStore.getState().setColyseusBoards(getBoardsSnapshot(room));
+      });
+    });
+
+    room.state.boards.onRemove((_board: any, boardId: string) => {
+      console.log(`[Boards] Board removed: ${boardId}`);
+    });
+
+    // Listen for messages
+    room.onMessage('match_started', (data) => {
+      console.log(`[Colyseus] match_started: matchId=${data.matchId} boardId=${data.boardId} color=${data.color}`);
+      useGameStore.getState().setMatchStartedInfo(data);
+    });
+
+    room.onMessage('match_finished', (data) => {
+      console.log(`[Colyseus] match_finished: ${data.matchId} reason=${data.reason}`);
+    });
+
+    room.onMessage('error', (data) => {
+      console.warn(`[Colyseus] Error: ${data.message}`);
+    });
+
+    room.onMessage('chat', (data) => {
+      useGameStore.getState().addChatMessage({
+        id: data.id,
+        region: '',
+        user_id: data.playerId,
+        username: data.username,
+        message: data.message,
+        created_at: data.createdAt,
+      });
+    });
+
+    // Initial state
+    useGameStore.getState().setColyseusBoards(getBoardsSnapshot(room));
+    updateOnlineCount(room);
+  }
+
   return (
     <div
       ref={containerRef}
@@ -248,4 +206,33 @@ export function GameCanvas() {
       style={{ imageRendering: 'pixelated' }}
     />
   );
+}
+
+function updateOnlineCount(room: any) {
+  const count = room.state.players.size;
+  useGameStore.getState().setOnlinePlayers(count - 1);
+}
+
+function updateBoardVisual(scene: any, board: any) {
+  if (board.status === 'waiting') {
+    scene.updateBoardStatus(board.id, 'waiting');
+  } else if (board.status === 'playing') {
+    scene.updateBoardStatus(board.id, 'in_match');
+  } else {
+    scene.updateBoardStatus(board.id, 'idle');
+  }
+}
+
+function getBoardsSnapshot(room: any): any[] {
+  const boards: any[] = [];
+  room.state.boards.forEach((board: any, id: string) => {
+    boards.push({
+      id,
+      name: board.name,
+      status: board.status,
+      waitingPlayerId: board.waitingPlayerId,
+      waitingPlayerName: board.waitingPlayerName,
+    });
+  });
+  return boards;
 }

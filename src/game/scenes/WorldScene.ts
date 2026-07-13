@@ -2,8 +2,6 @@ import Phaser from 'phaser';
 import { PLAYER_CONFIG } from '../config/playerConfig';
 import { MAP_CONFIG } from '../config/mapConfig';
 import { RemotePlayerInterpolator } from '../network/interpolation';
-import { sendMovementTarget } from '../network/socketClient';
-import type { PlayerState } from '../network/types';
 
 interface ChessArenaZone {
   id: string;
@@ -20,10 +18,22 @@ interface ChessArenaZone {
 interface RemotePlayer {
   container: Phaser.GameObjects.Container;
   sprite: Phaser.GameObjects.Sprite;
+  nameText: Phaser.GameObjects.Text;
   interpolator: RemotePlayerInterpolator;
   direction: string;
   isMoving: boolean;
+  sessionId: string;
+  playerId: string;
 }
+
+type MovementSender = (data: {
+  x: number;
+  y: number;
+  targetX: number;
+  targetY: number;
+  direction: string;
+  isMoving: boolean;
+}) => void;
 
 export class WorldScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Sprite;
@@ -38,6 +48,7 @@ export class WorldScene extends Phaser.Scene {
   private movementLocked = false;
   private defaultZoom = 2;
   private boardZoom = 3;
+  private movementSender: MovementSender | null = null;
 
   public onBoardClick?: (arenaId: string, arenaTitle: string) => void;
   public onHouseClick?: (houseId: string) => void;
@@ -146,6 +157,7 @@ export class WorldScene extends Phaser.Scene {
   update() {
     if (!this.player) return;
 
+    // Update remote players interpolation
     this.otherPlayers.forEach((remote) => {
       const pos = remote.interpolator.getPosition();
       remote.container.x = pos.x;
@@ -217,9 +229,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private emitMovement(isMoving: boolean, direction: 'up' | 'down' | 'left' | 'right' = 'down') {
-    if (!this.localPlayerId) return;
-    sendMovementTarget({
-      playerId: this.localPlayerId,
+    if (!this.movementSender) return;
+    this.movementSender({
       x: this.player.x,
       y: this.player.y,
       targetX: this.target?.x ?? this.player.x,
@@ -271,7 +282,6 @@ export class WorldScene extends Phaser.Scene {
         const objName = obj.name || '';
         const props: any[] = (obj as any).properties || [];
 
-        // Check custom property "type" for chess_arena
         const propType = props.find((p: any) => p.name === 'type')?.value || '';
 
         const isChessArena =
@@ -285,14 +295,6 @@ export class WorldScene extends Phaser.Scene {
 
           const w = obj.width || 80;
           const h = obj.height || 80;
-
-          console.log(`[Interactives] Chess Arena detected:`);
-          console.log(`  name: "${objName}"`);
-          console.log(`  type: "${objType}"`);
-          console.log(`  id: "${id}"`);
-          console.log(`  title: "${title}"`);
-          console.log(`  x: ${obj.x}, y: ${obj.y}`);
-          console.log(`  width: ${w}, height: ${h}`);
 
           const zone = this.add.zone(obj.x + w / 2, obj.y + h / 2, w, h);
           zone.setInteractive({ useHandCursor: true });
@@ -316,14 +318,6 @@ export class WorldScene extends Phaser.Scene {
               const title = objectLayer.name;
               const w = obj.width || 80;
               const h = obj.height || 80;
-
-              console.log(`[Interactives] Chess Arena detected (fallback):`);
-              console.log(`  name: "${obj.name || ''}"`);
-              console.log(`  type: "${obj.type || ''}"`);
-              console.log(`  id: "${id}"`);
-              console.log(`  title: "${title}"`);
-              console.log(`  x: ${obj.x}, y: ${obj.y}`);
-              console.log(`  width: ${w}, height: ${h}`);
 
               const zone = this.add.zone(obj.x + w / 2, obj.y + h / 2, w, h);
               zone.setInteractive({ useHandCursor: true });
@@ -397,6 +391,10 @@ export class WorldScene extends Phaser.Scene {
     this.localRegion = region;
   }
 
+  public setMovementSender(sender: MovementSender) {
+    this.movementSender = sender;
+  }
+
   public getPlayerPosition(): { x: number; y: number } {
     return this.player ? { x: this.player.x, y: this.player.y } : { x: 800, y: 640 };
   }
@@ -405,78 +403,75 @@ export class WorldScene extends Phaser.Scene {
     return this.arenas;
   }
 
-  public handlePlayerSnapshot(players: PlayerState[]) {
-    const activeIds = new Set<string>();
-
-    players.forEach(p => {
-      if (p.id === this.localPlayerId) return;
-      activeIds.add(p.id);
-
-      if (this.otherPlayers.has(p.id)) {
-        const remote = this.otherPlayers.get(p.id)!;
-        remote.interpolator.pushSnapshot(p.x, p.y);
-        remote.direction = p.direction;
-        remote.isMoving = p.isMoving;
-      } else {
-        this.addRemotePlayer(p);
-      }
-    });
-
-    this.otherPlayers.forEach((remote, id) => {
-      if (!activeIds.has(id)) {
-        remote.container.destroy();
-        this.otherPlayers.delete(id);
-      }
-    });
+  public handlePlayerJoined(p: { id: string; socketId: string; username: string; rating: number; region: string; x: number; y: number; targetX: number; targetY: number; direction: string; isMoving: boolean }) {
+    if (p.id === this.localPlayerId) return;
+    const sessionId = p.socketId;
+    if (this.otherPlayers.has(sessionId)) return;
+    this.addRemotePlayer(sessionId, p);
   }
 
-  private addRemotePlayer(p: PlayerState) {
+  public handlePlayerLeftBySession(sessionId: string) {
+    const remote = this.otherPlayers.get(sessionId);
+    if (remote) {
+      remote.container.destroy();
+      this.otherPlayers.delete(sessionId);
+    }
+  }
+
+  public updateRemotePlayerState(sessionId: string, state: { x: number; y: number; targetX: number; targetY: number; direction: string; isMoving: boolean }) {
+    const remote = this.otherPlayers.get(sessionId);
+    if (!remote) return;
+    remote.interpolator.pushSnapshot(state.x, state.y);
+    remote.direction = state.direction;
+    remote.isMoving = state.isMoving;
+  }
+
+  private addRemotePlayer(sessionId: string, p: { id: string; username: string; rating: number; x: number; y: number; direction: string; isMoving: boolean }) {
     const c = this.add.container(p.x, p.y).setDepth(99);
     const s = this.add.sprite(0, 0, 'player_sprite', 0);
     s.anims.play('idle_down', true);
     c.add(s);
-    c.add(this.add.text(0, -30, p.username, { fontSize: '8px', color: '#fff', stroke: '#000', strokeThickness: 2 }).setOrigin(0.5));
-    c.add(this.add.text(0, -20, `${p.rating}`, { fontSize: '7px', color: '#ffd700', stroke: '#000', strokeThickness: 1 }).setOrigin(0.5));
+
+    const nameText = this.add.text(0, -30, p.username, {
+      fontSize: '8px',
+      color: '#fff',
+      stroke: '#000',
+      strokeThickness: 2,
+    }).setOrigin(0.5);
+    c.add(nameText);
+
+    const ratingText = this.add.text(0, -20, `${p.rating}`, {
+      fontSize: '7px',
+      color: '#ffd700',
+      stroke: '#000',
+      strokeThickness: 1,
+    }).setOrigin(0.5);
+    c.add(ratingText);
+
     c.setSize(48, 48);
     c.setInteractive(new Phaser.Geom.Rectangle(-24, -24, 48, 48), Phaser.Geom.Rectangle.Contains);
-    c.on('pointerdown', (pointer: Phaser.Input.Pointer) => { pointer.event.stopPropagation(); if (this.onPlayerClick) this.onPlayerClick(p.id); });
+    c.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      pointer.event.stopPropagation();
+      if (this.onPlayerClick) this.onPlayerClick(p.id);
+    });
 
     const interpolator = new RemotePlayerInterpolator(p.x, p.y);
-    this.otherPlayers.set(p.id, { container: c, sprite: s, interpolator, direction: p.direction, isMoving: p.isMoving });
-  }
-
-  public handlePlayerJoined(p: PlayerState) {
-    if (p.id === this.localPlayerId) return;
-    if (!this.otherPlayers.has(p.id)) {
-      this.addRemotePlayer(p);
-    }
-  }
-
-  public handlePlayerLeft(playerId: string) {
-    if (this.otherPlayers.has(playerId)) {
-      this.otherPlayers.get(playerId)!.container.destroy();
-      this.otherPlayers.delete(playerId);
-    }
-  }
-
-  public updateOtherPlayer(userId: string, x: number, y: number, username: string, rating: number) {
-    if (this.otherPlayers.has(userId)) {
-      const remote = this.otherPlayers.get(userId)!;
-      remote.interpolator.pushSnapshot(x, y);
-    } else {
-      this.addRemotePlayer({ id: userId, socketId: '', username, rating, region: this.localRegion, x, y, targetX: x, targetY: y, direction: 'down', isMoving: false });
-    }
-  }
-
-  public removeOtherPlayer(userId: string) {
-    this.handlePlayerLeft(userId);
+    this.otherPlayers.set(sessionId, {
+      container: c,
+      sprite: s,
+      nameText,
+      interpolator,
+      direction: p.direction,
+      isMoving: p.isMoving,
+      sessionId,
+      playerId: p.id,
+    });
   }
 
   public updateBoardStatus(arenaId: string, status: string) {
     const arena = this.arenas.find(a => a.id === arenaId || a.title === arenaId || a.name === arenaId);
     if (!arena) return;
 
-    // Remove existing indicator
     if (arena.statusIndicator) {
       arena.statusIndicator.destroy();
       arena.statusIndicator = undefined;
@@ -486,9 +481,7 @@ export class WorldScene extends Phaser.Scene {
     const cy = arena.y + arena.height / 2;
 
     if (status === 'waiting') {
-      const container = this.add.container(cx, cy).setDepth(150);
-
-      // Solid colored banner background
+      const container = this.add.container(cx, cy - 20).setDepth(150);
       const bannerW = Math.max(arena.width + 8, 70);
       const bannerH = 16;
       const bg = this.add.graphics();
@@ -507,7 +500,6 @@ export class WorldScene extends Phaser.Scene {
 
       container.add([bg, label]);
 
-      // Gentle pulse
       this.tweens.add({
         targets: container,
         alpha: { from: 1, to: 0.7 },
@@ -519,8 +511,7 @@ export class WorldScene extends Phaser.Scene {
 
       arena.statusIndicator = container;
     } else if (status === 'in_match') {
-      const container = this.add.container(cx, cy).setDepth(150);
-
+      const container = this.add.container(cx, cy - 20).setDepth(150);
       const bannerW = Math.max(arena.width + 8, 70);
       const bannerH = 16;
       const bg = this.add.graphics();
@@ -538,24 +529,16 @@ export class WorldScene extends Phaser.Scene {
       }).setOrigin(0.5);
 
       container.add([bg, label]);
-
       arena.statusIndicator = container;
     }
   }
 
-  // Move player to left side of arena (Player 1 position)
   public movePlayerToBoard(arenaId: string, side: 'left' | 'right') {
     const arena = this.arenas.find(a => a.id === arenaId || a.title === arenaId);
     if (!arena || !this.player) return;
 
     const centerY = arena.y + arena.height / 2;
-    let targetX: number;
-
-    if (side === 'left') {
-      targetX = arena.x - 16;
-    } else {
-      targetX = arena.x + arena.width + 16;
-    }
+    const targetX = side === 'left' ? arena.x - 16 : arena.x + arena.width + 16;
 
     this.movementLocked = true;
     this.target = null;
@@ -570,7 +553,6 @@ export class WorldScene extends Phaser.Scene {
       duration: 500,
       ease: 'Power2',
       onComplete: () => {
-        // Face toward the board
         if (side === 'left') {
           this.player.anims.play('idle_side', true);
           this.player.setFlipX(false);
@@ -596,7 +578,6 @@ export class WorldScene extends Phaser.Scene {
     if (arenaId) {
       const arena = this.arenas.find(a => a.id === arenaId);
       if (arena) {
-        // Player 1 goes to the left side of the board
         this.movePlayerToBoard(arenaId, 'left');
       }
     }

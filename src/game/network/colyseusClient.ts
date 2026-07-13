@@ -56,15 +56,15 @@ export function sendMovement(data: {
   direction: string;
   isMoving: boolean;
 }) {
-  worldRoom?.send('movement', data);
+  worldRoom?.send('move_to', data);
 }
 
 export function sendBoardJoin(boardId: string, playerName: string) {
-  worldRoom?.send('board_join', { boardId, playerName });
+  worldRoom?.send('join_board', { boardId, playerName });
 }
 
 export function sendBoardCancel(boardId: string) {
-  worldRoom?.send('board_cancel', { boardId });
+  worldRoom?.send('cancel_waiting', { boardId });
 }
 
 export function sendChessMove(matchId: string, from: string, to: string, promotion?: string) {
@@ -87,6 +87,6 @@ export function sendChat(message: string) {
   worldRoom?.send('chat', { message });
 }
 
-export function registerBoards(boards: { id: string; name: string; x: number; y: number }[]) {
+export function registerBoards(boards: { id: string; name: string; x: number; y: number; width?: number; height?: number }[]) {
   worldRoom?.send('register_boards', { boards });
 }
