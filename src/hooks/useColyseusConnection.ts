@@ -56,20 +56,28 @@ export const useColyseusStore = create<ColyseusState>((set) => ({
 export function useColyseusConnection() {
   const { user, profile } = useAuthStore();
   const { region, playerPosition } = useGameStore();
-  const { setPhase, setConnected, setError } = useColyseusStore();
-  const attemptedRef = useRef(false);
+  const cancelledRef = useRef(false);
 
   useEffect(() => {
     if (!isColyseusConfigured()) return;
-    if (!user || !profile || !region || attemptedRef.current) return;
-    attemptedRef.current = true;
+    if (!user || !profile || !region) return;
+
+    cancelledRef.current = false;
+
+    const existingRoom = getWorldRoom();
+    if (existingRoom) {
+      const store = useColyseusStore.getState();
+      if (!store.connected) {
+        store.setConnected(existingRoom.sessionId, existingRoom.roomId);
+      }
+      return;
+    }
 
     const endpoint = getColyseusEndpoint();
-
     console.log('[Colyseus] Connecting to:', endpoint);
     console.log('[Colyseus] Player:', profile.username, '| Region:', region);
 
-    setPhase('connecting');
+    useColyseusStore.getState().setPhase('connecting');
 
     const payload = {
       playerId: user.id,
@@ -80,33 +88,30 @@ export function useColyseusConnection() {
       y: playerPosition.y,
     };
 
-    console.log('[Colyseus] joinOrCreate("world") payload:', {
-      ...payload,
-      playerId: payload.playerId.slice(0, 8) + '...',
-    });
-
     joinWorldRoom(payload)
       .then((room) => {
+        if (cancelledRef.current) {
+          console.log('[Colyseus] Connection succeeded but effect was cancelled, leaving...');
+          leaveWorldRoom();
+          return;
+        }
         console.log('[Colyseus] Connected! Room:', room.roomId, '| Session:', room.sessionId);
-        setConnected(room.sessionId, room.roomId);
+        useColyseusStore.getState().setConnected(room.sessionId, room.roomId);
       })
       .catch((err) => {
+        if (cancelledRef.current) return;
         const message = err.message || String(err);
-        console.error('[Colyseus] Connection failed.');
-        console.error('[Colyseus] Endpoint:', endpoint);
-        console.error('[Colyseus] Error:', message);
-        if (err.stack) console.error('[Colyseus] Stack:', err.stack);
-        setError(message);
-        attemptedRef.current = false;
+        console.error('[Colyseus] Connection failed:', message);
+        useColyseusStore.getState().setError(message);
       });
 
     return () => {
-      attemptedRef.current = false;
+      cancelledRef.current = true;
       const room = getWorldRoom();
       if (room) {
         leaveWorldRoom();
         useColyseusStore.getState().reset();
       }
     };
-  }, [user, profile, region]);
+  }, [user?.id, profile?.username, region]);
 }

@@ -20,6 +20,7 @@ function getClient(): Client {
 }
 
 let worldRoom: Room<any> | null = null;
+let joinInProgress: Promise<Room<any>> | null = null;
 
 export function getWorldRoom(): Room<any> | null {
   return worldRoom;
@@ -37,27 +38,43 @@ export async function joinWorldRoom(options: {
     throw new Error('VITE_COLYSEUS_URL is not configured');
   }
 
+  if (worldRoom) {
+    console.log('[Colyseus] Already connected, reusing existing room');
+    return worldRoom;
+  }
+
+  if (joinInProgress) {
+    console.log('[Colyseus] Join already in progress, waiting...');
+    return joinInProgress;
+  }
+
   console.log(`[Colyseus] joining world region: ${options.region}`);
 
-  // Do NOT pass rootSchema - use Reflection so the server describes its own schema.
-  // This avoids the dual @colyseus/schema package problem where Vite resolves
-  // a different module instance than colyseus.js uses internally.
-  worldRoom = await getClient().joinOrCreate('world', options);
+  joinInProgress = getClient().joinOrCreate('world', options);
 
-  console.log(`[Colyseus] roomId: ${worldRoom.roomId}`);
-  console.log(`[Colyseus] sessionId: ${worldRoom.sessionId}`);
-
-  return worldRoom;
+  try {
+    const room = await joinInProgress;
+    worldRoom = room;
+    console.log(`[Colyseus] roomId: ${room.roomId}`);
+    console.log(`[Colyseus] sessionId: ${room.sessionId}`);
+    return room;
+  } finally {
+    joinInProgress = null;
+  }
 }
 
 export async function leaveWorldRoom(): Promise<void> {
+  joinInProgress = null;
+
   if (worldRoom) {
     const room = worldRoom;
     worldRoom = null;
+    console.log(`[Colyseus] Leaving room: ${room.roomId}`);
     try {
       await room.leave(true);
-    } catch {
-      // ignore errors during leave (socket may already be closed)
+      console.log('[Colyseus] Left room successfully');
+    } catch (e) {
+      console.warn('[Colyseus] Error during leave (ignored):', e);
     }
   }
 }

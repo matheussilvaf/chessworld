@@ -15,6 +15,7 @@ import { SettingsModal } from './components/game/SettingsModal';
 import { VoiceChatPanel } from './components/game/VoiceChatPanel';
 import { ChessBoard } from './components/chess/ChessBoard';
 import { useColyseusConnection } from './hooks/useColyseusConnection';
+import { leaveWorldRoom } from './game/network/colyseusClient';
 import { Loader2 } from 'lucide-react';
 
 function App() {
@@ -50,6 +51,14 @@ function App() {
 function GameScene() {
   useColyseusConnection();
   const showChessBoard = useChessStore((s) => s.showBoard);
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      leaveWorldRoom();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-900">

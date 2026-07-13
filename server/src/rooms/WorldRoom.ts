@@ -222,8 +222,23 @@ export class WorldRoom extends Room<WorldState> {
   }
 
   onJoin(client: Client, options: JoinOptions) {
+    const playerId = options.playerId || client.sessionId;
+
+    // Kick existing session for same player (stale connection / reconnect)
+    this.state.players.forEach((existing, existingSessionId) => {
+      if (existing.id === playerId && existingSessionId !== client.sessionId) {
+        console.log(`[WorldRoom] Duplicate player ${playerId}, removing stale session: ${existingSessionId}`);
+        this.state.voiceParticipants.delete(existingSessionId);
+        this.state.players.delete(existingSessionId);
+        const staleClient = this.clients.find(c => c.sessionId === existingSessionId);
+        if (staleClient) {
+          staleClient.leave();
+        }
+      }
+    });
+
     const player = new PlayerState();
-    player.id = options.playerId || client.sessionId;
+    player.id = playerId;
     player.sessionId = client.sessionId;
     player.username = options.username || 'Anonymous';
     player.rating = options.rating || 1200;
