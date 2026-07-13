@@ -5,6 +5,7 @@ import { useChessStore } from '../../stores/chessStore';
 import { useColyseusStore, type ColyseusPhase } from '../../hooks/useColyseusConnection';
 import { REGIONS } from '../../config/game';
 import { voiceClient } from '../../game/voice/livekitVoiceClient';
+import { leaveWorldRoom } from '../../game/network/colyseusClient';
 import {
   User, MessageSquare, Users, Settings, Trophy, Star, DoorOpen, Mic, Maximize, Minimize,
 } from 'lucide-react';
@@ -60,7 +61,9 @@ export function HUD() {
       await voiceClient.leave();
     }
 
-    (useGameStore.setState as any)({ region: null });
+    await leaveWorldRoom();
+    useColyseusStore.getState().reset();
+    useGameStore.setState({ region: null });
   }, []);
 
   return (

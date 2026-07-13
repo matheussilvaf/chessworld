@@ -101,11 +101,11 @@ export function useColyseusConnection() {
       });
 
     return () => {
+      attemptedRef.current = false;
       const room = getWorldRoom();
       if (room) {
         leaveWorldRoom();
         useColyseusStore.getState().reset();
-        attemptedRef.current = false;
       }
     };
   }, [user, profile, region]);

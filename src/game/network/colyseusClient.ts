@@ -52,8 +52,13 @@ export async function joinWorldRoom(options: {
 
 export async function leaveWorldRoom(): Promise<void> {
   if (worldRoom) {
-    await worldRoom.leave();
+    const room = worldRoom;
     worldRoom = null;
+    try {
+      await room.leave(true);
+    } catch {
+      // ignore errors during leave (socket may already be closed)
+    }
   }
 }
 

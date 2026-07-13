@@ -239,9 +239,11 @@ export class WorldRoom extends Room<WorldState> {
     console.log(`[WorldRoom] Player joined: ${player.username} (${client.sessionId}) | total: ${this.state.players.size}`);
   }
 
-  onLeave(client: Client) {
+  async onLeave(client: Client, consented: boolean) {
     const player = this.state.players.get(client.sessionId);
     if (player) {
+      console.log(`[WorldRoom] Player leaving: ${player.username} (${client.sessionId}) | consented: ${consented}`);
+
       this.state.boards.forEach((board) => {
         if (board.waitingPlayerId === player.id) {
           this.resetBoard(board);
@@ -264,6 +266,7 @@ export class WorldRoom extends Room<WorldState> {
 
       this.state.voiceParticipants.delete(client.sessionId);
       this.state.players.delete(client.sessionId);
+      console.log(`[WorldRoom] Player removed: ${player.username} | remaining: ${this.state.players.size}`);
     }
   }
 
