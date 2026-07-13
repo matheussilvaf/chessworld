@@ -1,18 +1,34 @@
 import { Schema, MapSchema, defineTypes } from '@colyseus/schema';
 
 export class PlayerState extends Schema {
-  id: string = '';
-  sessionId: string = '';
-  username: string = '';
-  rating: number = 0;
-  region: string = '';
-  x: number = 0;
-  y: number = 0;
-  targetX: number = 0;
-  targetY: number = 0;
-  direction: string = 'down';
-  isMoving: boolean = false;
-  currentBoardId: string = '';
+  id!: string;
+  sessionId!: string;
+  username!: string;
+  rating!: number;
+  region!: string;
+  x!: number;
+  y!: number;
+  targetX!: number;
+  targetY!: number;
+  direction!: string;
+  isMoving!: boolean;
+  currentBoardId!: string;
+
+  constructor() {
+    super();
+    this.id = '';
+    this.sessionId = '';
+    this.username = '';
+    this.rating = 0;
+    this.region = '';
+    this.x = 0;
+    this.y = 0;
+    this.targetX = 0;
+    this.targetY = 0;
+    this.direction = 'down';
+    this.isMoving = false;
+    this.currentBoardId = '';
+  }
 }
 
 defineTypes(PlayerState, {
@@ -31,23 +47,44 @@ defineTypes(PlayerState, {
 });
 
 export class BoardState extends Schema {
-  id: string = '';
-  name: string = '';
-  region: string = '';
-  x: number = 0;
-  y: number = 0;
-  width: number = 80;
-  height: number = 80;
-  status: string = 'idle';
-  waitingPlayerId: string = '';
-  waitingPlayerName: string = '';
-  timeCategory: string = '';
-  baseMinutes: number = 0;
-  incrementSeconds: number = 0;
-  timeLabel: string = '';
-  whitePlayerId: string = '';
-  blackPlayerId: string = '';
-  matchId: string = '';
+  id!: string;
+  name!: string;
+  region!: string;
+  x!: number;
+  y!: number;
+  width!: number;
+  height!: number;
+  status!: string;
+  waitingPlayerId!: string;
+  waitingPlayerName!: string;
+  timeCategory!: string;
+  baseMinutes!: number;
+  incrementSeconds!: number;
+  timeLabel!: string;
+  whitePlayerId!: string;
+  blackPlayerId!: string;
+  matchId!: string;
+
+  constructor() {
+    super();
+    this.id = '';
+    this.name = '';
+    this.region = '';
+    this.x = 0;
+    this.y = 0;
+    this.width = 80;
+    this.height = 80;
+    this.status = 'idle';
+    this.waitingPlayerId = '';
+    this.waitingPlayerName = '';
+    this.timeCategory = '';
+    this.baseMinutes = 0;
+    this.incrementSeconds = 0;
+    this.timeLabel = '';
+    this.whitePlayerId = '';
+    this.blackPlayerId = '';
+    this.matchId = '';
+  }
 }
 
 defineTypes(BoardState, {
@@ -71,15 +108,28 @@ defineTypes(BoardState, {
 });
 
 export class MatchState extends Schema {
-  id: string = '';
-  boardId: string = '';
-  region: string = '';
-  whitePlayerId: string = '';
-  blackPlayerId: string = '';
-  fen: string = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-  pgn: string = '';
-  status: string = 'playing';
-  turn: string = 'w';
+  id!: string;
+  boardId!: string;
+  region!: string;
+  whitePlayerId!: string;
+  blackPlayerId!: string;
+  fen!: string;
+  pgn!: string;
+  status!: string;
+  turn!: string;
+
+  constructor() {
+    super();
+    this.id = '';
+    this.boardId = '';
+    this.region = '';
+    this.whitePlayerId = '';
+    this.blackPlayerId = '';
+    this.fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    this.pgn = '';
+    this.status = 'playing';
+    this.turn = 'w';
+  }
 }
 
 defineTypes(MatchState, {
@@ -95,9 +145,16 @@ defineTypes(MatchState, {
 });
 
 export class WorldState extends Schema {
-  players = new MapSchema<PlayerState>();
-  boards = new MapSchema<BoardState>();
-  matches = new MapSchema<MatchState>();
+  players!: MapSchema<PlayerState>;
+  boards!: MapSchema<BoardState>;
+  matches!: MapSchema<MatchState>;
+
+  constructor() {
+    super();
+    this.players = new MapSchema<PlayerState>();
+    this.boards = new MapSchema<BoardState>();
+    this.matches = new MapSchema<MatchState>();
+  }
 }
 
 defineTypes(WorldState, {

@@ -4,9 +4,16 @@ import { BoardState } from './BoardState.js';
 import { MatchState } from './MatchState.js';
 
 export class WorldState extends Schema {
-  players = new MapSchema<PlayerState>();
-  boards = new MapSchema<BoardState>();
-  matches = new MapSchema<MatchState>();
+  players!: MapSchema<PlayerState>;
+  boards!: MapSchema<BoardState>;
+  matches!: MapSchema<MatchState>;
+
+  constructor() {
+    super();
+    this.players = new MapSchema<PlayerState>();
+    this.boards = new MapSchema<BoardState>();
+    this.matches = new MapSchema<MatchState>();
+  }
 }
 
 defineTypes(WorldState, {
