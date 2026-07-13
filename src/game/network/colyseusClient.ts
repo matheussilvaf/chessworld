@@ -1,5 +1,4 @@
 import { Client, Room } from 'colyseus.js';
-import { WorldState } from './schemas';
 
 const COLYSEUS_URL = import.meta.env.VITE_COLYSEUS_URL || '';
 
@@ -20,9 +19,9 @@ function getClient(): Client {
   return client;
 }
 
-let worldRoom: Room<WorldState> | null = null;
+let worldRoom: Room<any> | null = null;
 
-export function getWorldRoom(): Room<WorldState> | null {
+export function getWorldRoom(): Room<any> | null {
   return worldRoom;
 }
 
@@ -33,30 +32,20 @@ export async function joinWorldRoom(options: {
   region: string;
   x: number;
   y: number;
-}): Promise<Room<WorldState>> {
+}): Promise<Room<any>> {
   if (!isColyseusConfigured()) {
     throw new Error('VITE_COLYSEUS_URL is not configured');
   }
 
   console.log(`[Colyseus] joining world region: ${options.region}`);
-  console.log(`[Client Contract] colyseus.js version: 0.15.28`);
-  console.log(`[Client Contract] @colyseus/schema version: 2.x (explicit schemas)`);
 
-  worldRoom = await getClient().joinOrCreate<WorldState>('world', options, WorldState);
+  // Do NOT pass rootSchema - use Reflection so the server describes its own schema.
+  // This avoids the dual @colyseus/schema package problem where Vite resolves
+  // a different module instance than colyseus.js uses internally.
+  worldRoom = await getClient().joinOrCreate('world', options);
 
-  console.log(`[Client Contract] roomId: ${worldRoom.roomId}`);
-  console.log(`[Client Contract] sessionId: ${worldRoom.sessionId}`);
-  console.log(`[Client Contract] raw room.state:`, worldRoom.state);
-  console.log(`[Client Contract] players exists: ${Boolean(worldRoom.state?.players)}`);
-  console.log(`[Client Contract] boards exists: ${Boolean(worldRoom.state?.boards)}`);
-  console.log(`[Client Contract] matches exists: ${Boolean(worldRoom.state?.matches)}`);
-
-  if (worldRoom.state?.players) {
-    console.log(`[Client Contract] players.size: ${worldRoom.state.players.size}`);
-  }
-  if (worldRoom.state?.boards) {
-    console.log(`[Client Contract] boards.size: ${worldRoom.state.boards.size}`);
-  }
+  console.log(`[Colyseus] roomId: ${worldRoom.roomId}`);
+  console.log(`[Colyseus] sessionId: ${worldRoom.sessionId}`);
 
   return worldRoom;
 }
@@ -87,12 +76,10 @@ export function sendCreateChallenge(data: {
   timeLabel: string;
 }) {
   worldRoom?.send('create_challenge', data);
-  console.log(`[Boards] challenge created: ${data.boardId} ${data.timeLabel}`);
 }
 
 export function sendAcceptChallenge(boardId: string) {
   worldRoom?.send('accept_challenge', { boardId });
-  console.log(`[Boards] challenge accepted: ${boardId}`);
 }
 
 export function sendBoardCancel(boardId: string) {
@@ -121,5 +108,4 @@ export function sendChat(message: string) {
 
 export function registerBoards(boards: { id: string; name: string; x: number; y: number; width?: number; height?: number }[]) {
   worldRoom?.send('register_boards', { boards });
-  console.log(`[Boards] register_boards sent: ${boards.length} boards`);
 }
