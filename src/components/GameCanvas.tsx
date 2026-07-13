@@ -3,6 +3,7 @@ import Phaser from 'phaser';
 import { createPhaserGame, getWorldScene } from '../game/PhaserGame';
 import { useGameStore } from '../stores/gameStore';
 import { useAuthStore } from '../stores/authStore';
+import { useChessStore } from '../stores/chessStore';
 import { getWorldRoom, registerBoards, sendMovement } from '../game/network/colyseusClient';
 import { useColyseusStore } from '../hooks/useColyseusConnection';
 import type { WorldScene } from '../game/scenes/WorldScene';
@@ -198,7 +199,7 @@ export function GameCanvas() {
       updateOnlineCount(room);
     });
 
-    state.boards.onAdd((board: any, boardId: string) => {
+    state.boards.onAdd((board: any, _boardId: string) => {
       updateBoardVisual(scene, board);
       syncBoardsToStore(room);
 
@@ -211,6 +212,15 @@ export function GameCanvas() {
     state.boards.onRemove((_board: any, _boardId: string) => {
       syncBoardsToStore(room);
     });
+
+    // --- Matches ---
+    if (state.matches && typeof state.matches.onAdd === 'function') {
+      state.matches.onAdd((match: any, _matchId: string) => {
+        match.onChange(() => {
+          useChessStore.getState().syncFromColyseus(match);
+        });
+      });
+    }
 
     room.onMessage('state_contract', (data: any) => {
       console.log('[Colyseus] state_contract:', data);
@@ -288,6 +298,7 @@ function syncBoardsToStore(room: Room<any>) {
       baseMinutes: board.baseMinutes,
       incrementSeconds: board.incrementSeconds,
       timeLabel: board.timeLabel,
+      matchId: board.matchId || '',
     });
   });
   useGameStore.getState().setColyseusBoards(boards);

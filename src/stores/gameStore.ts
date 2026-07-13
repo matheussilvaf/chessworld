@@ -15,6 +15,7 @@ interface ColyseusBoardInfo {
   baseMinutes: number;
   incrementSeconds: number;
   timeLabel: string;
+  matchId: string;
 }
 
 interface MatchStartedInfo {

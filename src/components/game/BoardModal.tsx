@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useChessStore } from '../../stores/chessStore';
 import { sendCreateChallenge, sendAcceptChallenge, sendBoardCancel } from '../../game/network/colyseusClient';
-import { X, Loader2, Swords, Zap, Timer, Clock } from 'lucide-react';
+import { X, Loader2, Swords, Zap, Timer, Clock, Eye } from 'lucide-react';
 
 interface TimeControl {
   label: string;
@@ -44,11 +45,22 @@ const TIME_CONTROLS: { category: string; icon: React.ReactNode; controls: TimeCo
 export function BoardModal() {
   const { selectedBoard, setSelectedBoard, setBoardLocked, colyseusBoards, matchStartedInfo, setMatchStartedInfo } = useGameStore();
   const { user } = useAuthStore();
+  const { openMatch, openSpectate, matchId: activeMatchId, boardId: activeBoardId, reopenBoard } = useChessStore();
   const [selectedTime, setSelectedTime] = useState<TimeControl>({ label: '10 min', time: 10, increment: 0, category: 'rapid' });
   const [isWaiting, setIsWaiting] = useState(false);
 
-  // Match started notification
+  // Match started: auto-open chess board
   if (matchStartedInfo) {
+    const handleOpenMatch = () => {
+      if (user) {
+        openMatch(matchStartedInfo.matchId, matchStartedInfo.color, user.id);
+      }
+      setMatchStartedInfo(null);
+      setIsWaiting(false);
+      setBoardLocked(false);
+      setSelectedBoard(null);
+    };
+
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
         <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-sm overflow-hidden shadow-2xl">
@@ -58,24 +70,13 @@ export function BoardModal() {
             </div>
             <h3 className="text-white font-bold text-lg mb-2">Match Started!</h3>
             <p className="text-slate-400 text-sm mb-1">
-              Board: {matchStartedInfo.boardId}
-            </p>
-            <p className="text-slate-400 text-sm mb-1">
               You play as: <span className="text-amber-400 font-semibold">{matchStartedInfo.color === 'w' ? 'White' : 'Black'}</span>
             </p>
-            <p className="text-slate-500 text-xs mb-6">
-              Match ID: {matchStartedInfo.matchId.slice(0, 12)}...
-            </p>
             <button
-              onClick={() => {
-                setMatchStartedInfo(null);
-                setIsWaiting(false);
-                setBoardLocked(false);
-                setSelectedBoard(null);
-              }}
-              className="w-full py-3 rounded-xl font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors"
+              onClick={handleOpenMatch}
+              className="w-full py-3 rounded-xl font-semibold bg-gradient-to-r from-emerald-500 to-emerald-600 text-white hover:from-emerald-600 hover:to-emerald-700 shadow-lg shadow-emerald-500/20 transition-all mt-4"
             >
-              OK
+              Play!
             </button>
           </div>
         </div>
@@ -90,6 +91,14 @@ export function BoardModal() {
   const isWaitingOnServer = colyseusStatus === 'waiting';
   const isPlaying = colyseusStatus === 'playing';
   const waitingPlayerIsMe = boardState?.waitingPlayerId === user?.id;
+
+  // If this board has my active match, reopen it
+  if (isPlaying && activeMatchId && activeBoardId === selectedBoard.id) {
+    reopenBoard();
+    setSelectedBoard(null);
+    setBoardLocked(false);
+    return null;
+  }
 
   const handleCreateChallenge = () => {
     if (!user) return;
@@ -123,7 +132,14 @@ export function BoardModal() {
     }
   };
 
-  // Waiting state (I created a challenge)
+  const handleSpectate = () => {
+    if (!boardState?.matchId) return;
+    openSpectate(boardState.matchId);
+    setSelectedBoard(null);
+    setBoardLocked(false);
+  };
+
+  // Waiting state
   if (isWaiting || (isWaitingOnServer && waitingPlayerIsMe)) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
@@ -151,7 +167,7 @@ export function BoardModal() {
     );
   }
 
-  // Board is in a match
+  // Board has an active match - offer spectate
   if (isPlaying) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
@@ -162,21 +178,30 @@ export function BoardModal() {
             </div>
             <h3 className="text-white font-bold text-lg mb-1">Match in Progress</h3>
             <p className="text-slate-400 text-sm mb-6">
-              This board already has a match going on.
+              A match is being played on this board.
             </p>
-            <button
-              onClick={handleClose}
-              className="w-full py-3 rounded-xl font-semibold bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition-colors"
-            >
-              Close
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={handleClose}
+                className="flex-1 py-3 rounded-xl font-semibold bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition-colors"
+              >
+                Close
+              </button>
+              <button
+                onClick={handleSpectate}
+                className="flex-1 py-3 rounded-xl font-semibold bg-blue-500/15 text-blue-400 border border-blue-500/30 hover:bg-blue-500/25 transition-colors flex items-center justify-center gap-2"
+              >
+                <Eye className="w-4 h-4" />
+                Watch
+              </button>
+            </div>
           </div>
         </div>
       </div>
     );
   }
 
-  // Another player is waiting - show accept challenge modal
+  // Another player is waiting
   if (isWaitingOnServer && !waitingPlayerIsMe) {
     const categoryLabel = (boardState?.timeCategory || 'rapid').charAt(0).toUpperCase() + (boardState?.timeCategory || 'rapid').slice(1);
 
@@ -234,7 +259,7 @@ export function BoardModal() {
     );
   }
 
-  // Default: Time control selection (board is idle)
+  // Default: Time control selection
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
       <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-sm overflow-hidden shadow-2xl">

@@ -6,10 +6,18 @@ export class MatchState extends Schema {
   region!: string;
   whitePlayerId!: string;
   blackPlayerId!: string;
+  whitePlayerName!: string;
+  blackPlayerName!: string;
   fen!: string;
   pgn!: string;
   status!: string;
   turn!: string;
+  whiteTimeMs!: number;
+  blackTimeMs!: number;
+  incrementMs!: number;
+  lastMoveAt!: number;
+  winnerId!: string;
+  result!: string;
 
   constructor() {
     super();
@@ -18,10 +26,18 @@ export class MatchState extends Schema {
     this.region = '';
     this.whitePlayerId = '';
     this.blackPlayerId = '';
+    this.whitePlayerName = '';
+    this.blackPlayerName = '';
     this.fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
     this.pgn = '';
     this.status = 'playing';
     this.turn = 'w';
+    this.whiteTimeMs = 600000;
+    this.blackTimeMs = 600000;
+    this.incrementMs = 0;
+    this.lastMoveAt = 0;
+    this.winnerId = '';
+    this.result = '';
   }
 }
 
@@ -31,8 +47,16 @@ defineTypes(MatchState, {
   region: 'string',
   whitePlayerId: 'string',
   blackPlayerId: 'string',
+  whitePlayerName: 'string',
+  blackPlayerName: 'string',
   fen: 'string',
   pgn: 'string',
   status: 'string',
   turn: 'string',
+  whiteTimeMs: 'number',
+  blackTimeMs: 'number',
+  incrementMs: 'number',
+  lastMoveAt: 'number',
+  winnerId: 'string',
+  result: 'string',
 });

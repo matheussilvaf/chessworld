@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { useChessStore } from '../../stores/chessStore';
 import { useAuthStore } from '../../stores/authStore';
 import { BOARD_THEMES } from '../../config/game';
-import { X, Flag, RotateCcw, Eye } from 'lucide-react';
+import { X, Flag, Eye } from 'lucide-react';
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'];
@@ -30,16 +30,32 @@ function formatTime(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-interface ChessBoardProps {
-  onClose: () => void;
-  opponentName?: string;
-  opponentRating?: number;
+function useDisplayTimes() {
+  const { whiteTimeMs, blackTimeMs, lastMoveAt, turn, gameOver } = useChessStore();
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (gameOver) return;
+    const interval = setInterval(() => setNow(Date.now()), 100);
+    return () => clearInterval(interval);
+  }, [gameOver]);
+
+  const elapsed = gameOver ? 0 : Math.max(0, now - lastMoveAt);
+  const displayWhite = turn === 'w' ? Math.max(0, whiteTimeMs - elapsed) : whiteTimeMs;
+  const displayBlack = turn === 'b' ? Math.max(0, blackTimeMs - elapsed) : blackTimeMs;
+
+  return { displayWhite, displayBlack };
 }
 
-export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoardProps) {
-  const { game, playerColor, selectedSquare, validMoves, isMyTurn, gameOver, result, match, isSpectating, whiteTimeMs, blackTimeMs, timerRunning } = useChessStore();
-  const { selectSquare, makeMove, abandonMatch, tickTimer, timeoutLoss } = useChessStore();
+export function ChessBoard() {
+  const {
+    game, playerColor, selectedSquare, validMoves, isMyTurn,
+    gameOver, result, winnerId, isSpectating,
+    turn, whitePlayerName, blackPlayerName,
+  } = useChessStore();
+  const { selectSquare, makeMove, resign, closeBoard } = useChessStore();
   const { user, profile } = useAuthStore();
+  const { displayWhite, displayBlack } = useDisplayTimes();
 
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
@@ -47,40 +63,20 @@ export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoard
 
   const boardTheme = BOARD_THEMES.find(t => t.id === (profile?.board_theme || 'classic')) || BOARD_THEMES[0];
 
-  // Timer tick
-  useEffect(() => {
-    if (!timerRunning || gameOver) return;
-    const interval = setInterval(() => {
-      tickTimer();
-    }, 100);
-    return () => clearInterval(interval);
-  }, [timerRunning, gameOver, tickTimer]);
-
-  // Handle timeout
-  useEffect(() => {
-    if (gameOver || !match || isSpectating) return;
-    const myColor = playerColor;
-    if (!myColor) return;
-
-    if (myColor === 'w' && match.turn === 'w' && whiteTimeMs <= 0) {
-      if (user) timeoutLoss(user.id);
-    } else if (myColor === 'b' && match.turn === 'b' && blackTimeMs <= 0) {
-      if (user) timeoutLoss(user.id);
-    }
-  }, [whiteTimeMs, blackTimeMs, gameOver]);
-
-  if (!game || !match) return null;
+  if (!game) return null;
 
   const board = game.board();
   const displayBoard = playerColor === 'b' ? [...board].reverse().map(row => [...row].reverse()) : board;
   const displayFiles = playerColor === 'b' ? [...FILES].reverse() : FILES;
   const displayRanks = playerColor === 'b' ? [...RANKS].reverse() : RANKS;
 
-  // Determine which timer is on top vs bottom based on player perspective
-  const topTimeMs = playerColor === 'w' ? blackTimeMs : whiteTimeMs;
-  const bottomTimeMs = playerColor === 'w' ? whiteTimeMs : blackTimeMs;
-  const topActive = playerColor === 'w' ? match.turn === 'b' : match.turn === 'w';
-  const bottomActive = playerColor === 'w' ? match.turn === 'w' : match.turn === 'b';
+  const topTimeMs = playerColor === 'w' ? displayBlack : displayWhite;
+  const bottomTimeMs = playerColor === 'w' ? displayWhite : displayBlack;
+  const topActive = playerColor === 'w' ? turn === 'b' : turn === 'w';
+  const bottomActive = playerColor === 'w' ? turn === 'w' : turn === 'b';
+
+  const opponentName = playerColor === 'w' ? blackPlayerName : whitePlayerName;
+  const myName = playerColor === 'w' ? whitePlayerName : blackPlayerName;
 
   const getSquareFromIndices = (rankIdx: number, fileIdx: number) => {
     const actualRank = playerColor === 'b' ? 7 - rankIdx : rankIdx;
@@ -89,16 +85,11 @@ export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoard
   };
 
   const handleSquareClick = (rankIdx: number, fileIdx: number) => {
-    if (dragging || isSpectating) return;
+    if (dragging || isSpectating || !isMyTurn || gameOver) return;
     const square = getSquareFromIndices(rankIdx, fileIdx);
 
     if (selectedSquare && validMoves.includes(square)) {
-      if (user) {
-        const piece = game.get(selectedSquare as any);
-        const actualRank = playerColor === 'b' ? 7 - rankIdx : rankIdx;
-        const isPromotion = piece?.type === 'p' && (actualRank === 0 || actualRank === 7);
-        makeMove(selectedSquare, square, user.id, isPromotion ? 'q' : undefined);
-      }
+      makeMove(selectedSquare, square);
     } else {
       selectSquare(square);
     }
@@ -128,7 +119,7 @@ export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoard
   }, [dragging]);
 
   const handleDragEnd = useCallback((e: React.MouseEvent | React.TouchEvent) => {
-    if (!dragging || !boardRef.current || !user) {
+    if (!dragging || !boardRef.current) {
       setDragging(null);
       setDragPos(null);
       return;
@@ -145,21 +136,16 @@ export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoard
     if (fileIdx >= 0 && fileIdx < 8 && rankIdx >= 0 && rankIdx < 8) {
       const targetSquare = getSquareFromIndices(rankIdx, fileIdx);
       if (validMoves.includes(targetSquare)) {
-        const piece = game.get(dragging as any);
-        const actualRank = playerColor === 'b' ? 7 - rankIdx : rankIdx;
-        const isPromotion = piece?.type === 'p' && (actualRank === 0 || actualRank === 7);
-        makeMove(dragging, targetSquare, user.id, isPromotion ? 'q' : undefined);
+        makeMove(dragging, targetSquare);
       }
     }
 
     setDragging(null);
     setDragPos(null);
-  }, [dragging, validMoves, user, playerColor, game, makeMove]);
+  }, [dragging, validMoves, makeMove]);
 
-  const handleAbandon = () => {
-    if (user && !gameOver) {
-      abandonMatch(user.id);
-    }
+  const handleResign = () => {
+    if (!gameOver) resign();
   };
 
   const inCheck = game.inCheck();
@@ -170,18 +156,17 @@ export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoard
     if (isSpectating) {
       if (result === 'checkmate') return 'Checkmate!';
       if (result === 'timeout') return 'Time out!';
-      if (result === 'resigned') return 'Resigned!';
+      if (result === 'resign') return 'Resigned!';
+      if (result === 'abandon') return 'Player disconnected!';
       if (result === 'stalemate') return 'Stalemate';
       return 'Game over';
     }
-    if (result === 'checkmate' && match.winner_user_id === user?.id) return 'You won by checkmate!';
-    if (result === 'checkmate') return 'You lost by checkmate.';
-    if (result === 'timeout' && match.winner_user_id === user?.id) return 'Opponent ran out of time!';
-    if (result === 'timeout') return 'You ran out of time.';
-    if (result === 'resigned' && match.winner_user_id === user?.id) return 'Opponent resigned!';
-    if (result === 'resigned') return 'You resigned.';
+    const iWon = winnerId === user?.id;
+    if (result === 'checkmate') return iWon ? 'You won by checkmate!' : 'You lost by checkmate.';
+    if (result === 'timeout') return iWon ? 'Opponent ran out of time!' : 'You ran out of time.';
+    if (result === 'resign') return iWon ? 'Opponent resigned!' : 'You resigned.';
+    if (result === 'abandon') return iWon ? 'Opponent disconnected!' : 'You disconnected.';
     if (result === 'stalemate') return 'Draw by stalemate.';
-    if (result === 'draw') return 'Draw.';
     return 'Game over';
   })();
 
@@ -194,15 +179,15 @@ export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoard
         onTouchMove={handleDragMove}
         onTouchEnd={handleDragEnd}
       >
-        {/* Top player (opponent) info + timer */}
+        {/* Top player info + timer */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-800">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center">
               <img src={PIECE_IMAGES[playerColor === 'w' ? 'bk' : 'wk']} alt="" className="w-5 h-5" />
             </div>
             <div>
-              <div className="text-white font-semibold text-sm">{opponentName || 'Opponent'}</div>
-              <div className="text-slate-400 text-xs">{opponentRating || '?'} ELO</div>
+              <div className="text-white font-semibold text-sm">{isSpectating ? whitePlayerName : opponentName}</div>
+              {isSpectating && <div className="text-slate-400 text-xs">White</div>}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -213,23 +198,23 @@ export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoard
             }`}>
               {formatTime(topTimeMs)}
             </div>
-            <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors p-1">
+            <button onClick={closeBoard} className="text-slate-400 hover:text-white transition-colors p-1">
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
         {/* Status bar */}
-        {(gameOver || (inCheck && !isSpectating)) && (
+        {gameOver && (
           <div className="px-4 py-2 text-center border-b border-slate-800">
-            {gameOver ? (
-              <div className="text-amber-400 font-semibold text-sm">{resultText}</div>
-            ) : (
-              <div className="text-red-400 text-sm font-medium animate-pulse">CHECK!</div>
-            )}
+            <div className="text-amber-400 font-semibold text-sm">{resultText}</div>
           </div>
         )}
-
+        {!gameOver && inCheck && !isSpectating && (
+          <div className="px-4 py-2 text-center border-b border-slate-800">
+            <div className="text-red-400 text-sm font-medium animate-pulse">CHECK!</div>
+          </div>
+        )}
         {isSpectating && !gameOver && (
           <div className="px-4 py-1.5 text-center border-b border-slate-800">
             <div className="text-blue-400 text-xs font-medium flex items-center justify-center gap-1.5">
@@ -306,7 +291,7 @@ export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoard
             </div>
 
             {/* Drag ghost */}
-            {dragging && dragPos && (
+            {dragging && dragPos && game.get(dragging as any) && (
               <img
                 src={PIECE_IMAGES[game.get(dragging as any)!.color + game.get(dragging as any)!.type]}
                 alt=""
@@ -318,13 +303,16 @@ export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoard
           </div>
         </div>
 
-        {/* Bottom player info + timer + controls */}
+        {/* Bottom player info + controls */}
         <div className="flex items-center justify-between px-4 py-2.5 border-t border-slate-800">
           <div className="flex items-center gap-3">
             {isSpectating ? (
               <div className="flex items-center gap-2">
                 <Eye className="w-4 h-4 text-blue-400" />
-                <span className="text-blue-400 text-sm font-medium">Spectating</span>
+                <div>
+                  <div className="text-white font-semibold text-sm">{blackPlayerName}</div>
+                  <div className="text-slate-400 text-xs">Black</div>
+                </div>
               </div>
             ) : (
               <>
@@ -332,14 +320,13 @@ export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoard
                   <img src={PIECE_IMAGES[playerColor === 'w' ? 'wk' : 'bk']} alt="" className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="text-white font-semibold text-sm">{profile?.username || 'You'}</div>
-                  <div className="text-slate-400 text-xs">{profile?.rating || 500} ELO</div>
+                  <div className="text-white font-semibold text-sm">{myName || profile?.username || 'You'}</div>
+                  <div className="text-slate-400 text-xs">{profile?.rating || 1200} ELO</div>
                 </div>
               </>
             )}
           </div>
           <div className="flex items-center gap-2">
-            {/* Timer for bottom player */}
             {!isSpectating && (
               <div className={`px-3 py-1.5 rounded-lg font-mono text-lg font-bold min-w-[80px] text-center ${
                 bottomActive && !gameOver
@@ -350,16 +337,16 @@ export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoard
               </div>
             )}
             {isSpectating ? (
-              <button
-                onClick={onClose}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 text-slate-300 rounded-lg text-xs font-medium hover:bg-slate-600 transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-                Stop Watching
-              </button>
+              <div className={`px-3 py-1.5 rounded-lg font-mono text-lg font-bold min-w-[80px] text-center ${
+                turn === 'b' && !gameOver
+                  ? displayBlack < 30000 ? 'bg-red-500/20 text-red-400 border border-red-500/40' : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                  : 'bg-slate-800 text-slate-400 border border-slate-700'
+              }`}>
+                {formatTime(displayBlack)}
+              </div>
             ) : !gameOver ? (
               <button
-                onClick={handleAbandon}
+                onClick={handleResign}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/15 text-red-400 rounded-lg text-xs font-medium hover:bg-red-500/25 transition-colors border border-red-500/20"
               >
                 <Flag className="w-3.5 h-3.5" />
@@ -367,10 +354,9 @@ export function ChessBoard({ onClose, opponentName, opponentRating }: ChessBoard
               </button>
             ) : (
               <button
-                onClick={onClose}
+                onClick={closeBoard}
                 className="flex items-center gap-1.5 px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg text-sm font-semibold hover:bg-emerald-500/30 transition-colors border border-emerald-500/30"
               >
-                <RotateCcw className="w-4 h-4" />
                 Back to Map
               </button>
             )}

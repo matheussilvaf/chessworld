@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useAuthStore } from './stores/authStore';
 import { useGameStore } from './stores/gameStore';
+import { useChessStore } from './stores/chessStore';
 import { AuthPage } from './components/auth/AuthPage';
 import { ServerSelect } from './components/game/ServerSelect';
 import { GameCanvas } from './components/GameCanvas';
@@ -12,6 +13,7 @@ import { HouseModal } from './components/game/HouseModal';
 import { FriendRequests } from './components/game/FriendRequests';
 import { SettingsModal } from './components/game/SettingsModal';
 import { VoiceChatPanel } from './components/game/VoiceChatPanel';
+import { ChessBoard } from './components/chess/ChessBoard';
 import { useColyseusConnection } from './hooks/useColyseusConnection';
 import { Loader2 } from 'lucide-react';
 
@@ -47,6 +49,7 @@ function App() {
 
 function GameScene() {
   useColyseusConnection();
+  const showChessBoard = useChessStore((s) => s.showBoard);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-900">
@@ -59,6 +62,7 @@ function GameScene() {
       <FriendRequests />
       <SettingsModal />
       <VoiceChatPanel />
+      {showChessBoard && <ChessBoard />}
     </div>
   );
 }
