@@ -23,6 +23,7 @@
     "colyseus.js": "^0.15.28",
     "cors": "^2.8.6",
     "express": "^4.21.0",
+    "livekit-client": "^2.20.1",
     "lucide-react": "^0.344.0",
     "nanoid": "^5.0.0",
     "phaser": "^4.2.0",

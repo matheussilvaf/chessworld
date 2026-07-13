@@ -5,6 +5,7 @@ import { WorldState } from '../schemas/WorldState.js';
 import { PlayerState } from '../schemas/PlayerState.js';
 import { BoardState } from '../schemas/BoardState.js';
 import { MatchState } from '../schemas/MatchState.js';
+import { VoiceParticipantState } from '../schemas/VoiceParticipantState.js';
 
 interface JoinOptions {
   playerId: string;
@@ -192,6 +193,32 @@ export class WorldRoom extends Room<WorldState> {
         createdAt: new Date().toISOString(),
       });
     });
+
+    this.onMessage('voice_joined', (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+      if (this.state.voiceParticipants.has(client.sessionId)) return;
+
+      const vp = new VoiceParticipantState();
+      vp.sessionId = client.sessionId;
+      vp.playerId = player.id;
+      vp.username = player.username;
+      vp.region = player.region;
+      vp.joinedAt = Date.now();
+      vp.muted = false;
+      this.state.voiceParticipants.set(client.sessionId, vp);
+      console.log(`[WorldRoom] Voice joined: ${player.username} | total voice: ${this.state.voiceParticipants.size}`);
+    });
+
+    this.onMessage('voice_left', (client) => {
+      this.state.voiceParticipants.delete(client.sessionId);
+    });
+
+    this.onMessage('voice_muted_changed', (client, data) => {
+      const { muted } = data as { muted: boolean };
+      const vp = this.state.voiceParticipants.get(client.sessionId);
+      if (vp) vp.muted = muted;
+    });
   }
 
   onJoin(client: Client, options: JoinOptions) {
@@ -235,6 +262,7 @@ export class WorldRoom extends Room<WorldState> {
         }
       });
 
+      this.state.voiceParticipants.delete(client.sessionId);
       this.state.players.delete(client.sessionId);
     }
   }
