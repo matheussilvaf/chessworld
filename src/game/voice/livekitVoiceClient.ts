@@ -23,6 +23,7 @@ class LiveKitVoiceClient {
   private statusListeners = new Set<StatusListener>();
   private _status: VoiceStatus = 'disconnected';
   private _error: string | null = null;
+  private _micEnabled = false;
 
   get status(): VoiceStatus {
     return this._status;
@@ -30,6 +31,10 @@ class LiveKitVoiceClient {
 
   get error(): string | null {
     return this._error;
+  }
+
+  get micEnabled(): boolean {
+    return this._micEnabled;
   }
 
   onStatusChange(listener: StatusListener): () => void {
@@ -49,6 +54,7 @@ class LiveKitVoiceClient {
     }
 
     this.setStatus('connecting');
+    this._micEnabled = false;
 
     const roomName = `voice_world_${region}`;
     const baseUrl = getHttpBaseUrl();
@@ -87,7 +93,6 @@ class LiveKitVoiceClient {
       room.on(RoomEvent.Disconnected, this.handleDisconnected);
 
       await room.connect(url, token);
-      await room.localParticipant.setMicrophoneEnabled(true);
 
       this.room = room;
       this.setStatus('connected');
@@ -107,21 +112,27 @@ class LiveKitVoiceClient {
 
     await this.room.disconnect(true);
     this.room = null;
+    this._micEnabled = false;
     this.setStatus('disconnected');
   }
 
-  async setMuted(muted: boolean): Promise<void> {
-    if (!this.room) return;
-    await this.room.localParticipant.setMicrophoneEnabled(!muted);
+  async toggleMic(): Promise<boolean> {
+    if (!this.room) return false;
 
-    const worldRoom = getWorldRoom();
-    worldRoom?.send('voice_muted_changed', { muted });
-  }
+    const newState = !this._micEnabled;
 
-  isMuted(): boolean {
-    if (!this.room) return true;
-    const micPub = this.room.localParticipant.getTrackPublication(Track.Source.Microphone);
-    return !micPub || micPub.isMuted;
+    try {
+      await this.room.localParticipant.setMicrophoneEnabled(newState);
+      this._micEnabled = newState;
+
+      const worldRoom = getWorldRoom();
+      worldRoom?.send('voice_muted_changed', { muted: !newState });
+
+      return true;
+    } catch {
+      this._micEnabled = false;
+      return false;
+    }
   }
 
   private handleTrackSubscribed = (
@@ -146,6 +157,7 @@ class LiveKitVoiceClient {
 
   private handleDisconnected = () => {
     this.room = null;
+    this._micEnabled = false;
     this.setStatus('disconnected');
 
     const worldRoom = getWorldRoom();

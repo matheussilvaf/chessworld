@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useAuthStore } from '../../stores/authStore';
-import { Mic, MicOff, PhoneOff, X, Volume2 } from 'lucide-react';
+import { Mic, MicOff, PhoneOff, X, Volume2, LogIn } from 'lucide-react';
 import { voiceClient, type VoiceStatus } from '../../game/voice/livekitVoiceClient';
 import { getWorldRoom } from '../../game/network/colyseusClient';
 
@@ -18,13 +18,14 @@ export function VoiceChatPanel() {
   const { user, profile } = useAuthStore();
   const [status, setStatus] = useState<VoiceStatus>(voiceClient.status);
   const [error, setError] = useState<string | null>(voiceClient.error);
-  const [muted, setMuted] = useState(false);
+  const [micOn, setMicOn] = useState(false);
   const [participants, setParticipants] = useState<VoiceParticipant[]>([]);
 
   useEffect(() => {
     const unsub = voiceClient.onStatusChange((s, err) => {
       setStatus(s);
       setError(err || null);
+      if (s === 'disconnected') setMicOn(false);
     });
     return unsub;
   }, []);
@@ -65,19 +66,19 @@ export function VoiceChatPanel() {
   const handleJoin = useCallback(async () => {
     if (!user || !profile || !region) return;
     await voiceClient.join(region, user.id, profile.username);
-    setMuted(false);
   }, [user, profile, region]);
 
   const handleLeave = useCallback(async () => {
     await voiceClient.leave();
-    setMuted(false);
+    setMicOn(false);
   }, []);
 
-  const toggleMute = useCallback(async () => {
-    const newMuted = !muted;
-    await voiceClient.setMuted(newMuted);
-    setMuted(newMuted);
-  }, [muted]);
+  const handleToggleMic = useCallback(async () => {
+    const success = await voiceClient.toggleMic();
+    if (success) {
+      setMicOn(voiceClient.micEnabled);
+    }
+  }, []);
 
   if (!showVoiceChat) return null;
 
@@ -114,24 +115,43 @@ export function VoiceChatPanel() {
           {participants.length === 0 && (
             <p className="text-slate-500 text-xs text-center py-4">No one in voice chat yet</p>
           )}
-          {participants.map((p) => (
-            <div key={p.sessionId} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800/50 transition-colors">
-              <div className="relative">
-                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
-                  <span className="text-[10px] font-bold text-white">{p.username[0]?.toUpperCase()}</span>
+          {participants.map((p) => {
+            const isMe = p.playerId === user?.id;
+            return (
+              <div key={p.sessionId} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800/50 transition-colors">
+                <div className="relative">
+                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center">
+                    <span className="text-[10px] font-bold text-white">{p.username[0]?.toUpperCase()}</span>
+                  </div>
+                  {!p.muted && (
+                    <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-400 rounded-full border border-slate-900" />
+                  )}
                 </div>
-                {!p.muted && (
-                  <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-400 rounded-full border border-slate-900" />
+                <span className="text-white text-xs font-medium flex-1 truncate">
+                  {p.username}{isMe ? ' (you)' : ''}
+                </span>
+                {isMe ? (
+                  <button
+                    onClick={handleToggleMic}
+                    className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${
+                      micOn
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : 'bg-red-500/20 text-red-400'
+                    }`}
+                    title={micOn ? 'Mute microphone' : 'Unmute microphone'}
+                  >
+                    {micOn ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
+                  </button>
+                ) : (
+                  p.muted ? (
+                    <MicOff className="w-3.5 h-3.5 text-red-400" />
+                  ) : (
+                    <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                  )
                 )}
               </div>
-              <span className="text-white text-xs font-medium flex-1 truncate">{p.username}</span>
-              {p.muted ? (
-                <MicOff className="w-3.5 h-3.5 text-red-400" />
-              ) : (
-                <Mic className="w-3.5 h-3.5 text-emerald-400" />
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Controls */}
@@ -139,8 +159,9 @@ export function VoiceChatPanel() {
           {!connected && !connecting ? (
             <button
               onClick={handleJoin}
-              className="flex-1 py-2.5 rounded-lg bg-emerald-500/20 text-emerald-400 text-xs font-semibold hover:bg-emerald-500/30 transition-colors border border-emerald-500/30"
+              className="flex-1 py-2.5 rounded-lg bg-emerald-500/20 text-emerald-400 text-xs font-semibold hover:bg-emerald-500/30 transition-colors border border-emerald-500/30 flex items-center justify-center gap-1.5"
             >
+              <LogIn className="w-3.5 h-3.5" />
               Join Voice
             </button>
           ) : connecting ? (
@@ -148,26 +169,13 @@ export function VoiceChatPanel() {
               Connecting...
             </div>
           ) : (
-            <>
-              <button
-                onClick={toggleMute}
-                className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
-                  muted
-                    ? 'bg-red-500/20 text-red-400 border border-red-500/30'
-                    : 'bg-slate-700 text-white hover:bg-slate-600'
-                }`}
-                title={muted ? 'Unmute' : 'Mute'}
-              >
-                {muted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-              </button>
-              <button
-                onClick={handleLeave}
-                className="flex-1 py-2 rounded-lg bg-red-500/20 text-red-400 text-xs font-semibold hover:bg-red-500/30 transition-colors border border-red-500/30 flex items-center justify-center gap-1.5"
-              >
-                <PhoneOff className="w-3.5 h-3.5" />
-                Leave Voice
-              </button>
-            </>
+            <button
+              onClick={handleLeave}
+              className="flex-1 py-2.5 rounded-lg bg-red-500/20 text-red-400 text-xs font-semibold hover:bg-red-500/30 transition-colors border border-red-500/30 flex items-center justify-center gap-1.5"
+            >
+              <PhoneOff className="w-3.5 h-3.5" />
+              Leave Voice
+            </button>
           )}
         </div>
       </div>
