@@ -20,7 +20,7 @@
     "@colyseus/ws-transport": "^0.15.0",
     "@supabase/supabase-js": "^2.57.4",
     "chess.js": "^1.4.0",
-    "colyseus.js": "^0.16.22",
+    "colyseus.js": "^0.15.28",
     "cors": "^2.8.6",
     "express": "^4.21.0",
     "lucide-react": "^0.344.0",

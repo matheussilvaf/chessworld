@@ -21,11 +21,15 @@ export class WorldRoom extends Room<WorldState> {
   private readonly TICK_RATE = 20;
 
   onCreate(options: any) {
+    console.log(`[WorldRoom] onCreate called`);
     this.setState(new WorldState());
+    console.log(`[WorldRoom] state initialized`);
+    console.log(`[WorldRoom] state.players exists: ${Boolean(this.state.players)}`);
+    console.log(`[WorldRoom] state.boards exists: ${Boolean(this.state.boards)}`);
     this.setSimulationInterval(() => this.tick(), 1000 / this.TICK_RATE);
     this.maxClients = 100;
 
-    console.log(`[WorldRoom] Created for region: ${options.region || 'unknown'}`);
+    console.log(`[WorldRoom] Created for region: ${options.region || 'unknown'} | roomId: ${this.roomId}`);
 
     this.onMessage('move_to', (client, data) => {
       const player = this.state.players.get(client.sessionId);
@@ -51,8 +55,9 @@ export class WorldRoom extends Room<WorldState> {
       player.isMoving = data.isMoving;
     });
 
-    this.onMessage('register_boards', (_client, data) => {
+    this.onMessage('register_boards', (client, data) => {
       const { boards } = data as { boards: { id: string; name: string; x: number; y: number; width?: number; height?: number }[] };
+      console.log(`[WorldRoom] register_boards received from session: ${client.sessionId} | payload count: ${boards?.length}`);
       let registered = 0;
       for (const b of boards) {
         if (!this.state.boards.has(b.id)) {
@@ -257,7 +262,8 @@ export class WorldRoom extends Room<WorldState> {
     player.isMoving = false;
 
     this.state.players.set(client.sessionId, player);
-    console.log(`[WorldRoom] Player joined: ${player.username} (${this.state.players.size} total) roomId=${this.roomId}`);
+    console.log(`[WorldRoom] Player joined: ${player.username} | sessionId: ${client.sessionId} | players count: ${this.state.players.size} | roomId: ${this.roomId}`);
+    console.log(`[WorldRoom] boards count: ${this.state.boards.size}`);
   }
 
   onLeave(client: Client) {

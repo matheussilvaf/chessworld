@@ -41,6 +41,10 @@ export async function joinWorldRoom(options: {
   worldRoom = await getClient().joinOrCreate('world', options);
   console.log(`[Colyseus] joined roomId: ${worldRoom.roomId}`);
   console.log(`[Colyseus] sessionId: ${worldRoom.sessionId}`);
+  console.log(`[State Contract] room.state:`, worldRoom.state);
+  console.log(`[State Contract] state keys:`, worldRoom.state ? Object.getOwnPropertyNames(worldRoom.state) : 'NO STATE');
+  console.log(`[State Contract] players exists:`, Boolean(worldRoom.state?.players));
+  console.log(`[State Contract] boards exists:`, Boolean(worldRoom.state?.boards));
   return worldRoom;
 }
 
