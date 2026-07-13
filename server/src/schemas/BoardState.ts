@@ -11,6 +11,10 @@ export class BoardState extends Schema {
   status: string = 'idle';
   waitingPlayerId: string = '';
   waitingPlayerName: string = '';
+  timeCategory: string = '';
+  baseMinutes: number = 0;
+  incrementSeconds: number = 0;
+  timeLabel: string = '';
   whitePlayerId: string = '';
   blackPlayerId: string = '';
   matchId: string = '';
@@ -27,6 +31,10 @@ defineTypes(BoardState, {
   status: 'string',
   waitingPlayerId: 'string',
   waitingPlayerName: 'string',
+  timeCategory: 'string',
+  baseMinutes: 'number',
+  incrementSeconds: 'number',
+  timeLabel: 'string',
   whitePlayerId: 'string',
   blackPlayerId: 'string',
   matchId: 'string',

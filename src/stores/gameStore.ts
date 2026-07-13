@@ -11,6 +11,10 @@ interface ColyseusBoardInfo {
   status: string;
   waitingPlayerId: string;
   waitingPlayerName: string;
+  timeCategory: string;
+  baseMinutes: number;
+  incrementSeconds: number;
+  timeLabel: string;
 }
 
 interface MatchStartedInfo {

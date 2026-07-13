@@ -215,7 +215,10 @@ function updateOnlineCount(room: any) {
 
 function updateBoardVisual(scene: any, board: any) {
   if (board.status === 'waiting') {
-    scene.updateBoardStatus(board.id, 'waiting');
+    scene.updateBoardStatus(board.id, 'waiting', {
+      playerName: board.waitingPlayerName,
+      timeLabel: board.timeLabel,
+    });
   } else if (board.status === 'playing') {
     scene.updateBoardStatus(board.id, 'in_match');
   } else {
@@ -232,6 +235,10 @@ function getBoardsSnapshot(room: any): any[] {
       status: board.status,
       waitingPlayerId: board.waitingPlayerId,
       waitingPlayerName: board.waitingPlayerName,
+      timeCategory: board.timeCategory,
+      baseMinutes: board.baseMinutes,
+      incrementSeconds: board.incrementSeconds,
+      timeLabel: board.timeLabel,
     });
   });
   return boards;

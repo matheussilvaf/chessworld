@@ -20,10 +20,12 @@ const activeGames = new Map<string, Chess>();
 export class WorldRoom extends Room<WorldState> {
   private readonly TICK_RATE = 20;
 
-  onCreate() {
+  onCreate(options: any) {
     this.setState(new WorldState());
     this.setSimulationInterval(() => this.tick(), 1000 / this.TICK_RATE);
     this.maxClients = 100;
+
+    console.log(`[WorldRoom] Created for region: ${options.region || 'unknown'}`);
 
     this.onMessage('move_to', (client, data) => {
       const player = this.state.players.get(client.sessionId);
@@ -66,38 +68,67 @@ export class WorldRoom extends Room<WorldState> {
           registered++;
         }
       }
-      console.log(`[WorldRoom] Registered ${registered} new boards (total: ${this.state.boards.size})`);
+      console.log(`[WorldRoom] Boards registered: ${registered} new (total: ${this.state.boards.size})`);
     });
 
-    this.onMessage('join_board', (client, data) => {
-      const { boardId, playerName } = data as { boardId: string; playerName: string };
+    this.onMessage('create_challenge', (client, data) => {
+      const { boardId, timeCategory, baseMinutes, incrementSeconds, timeLabel } = data as {
+        boardId: string;
+        timeCategory: string;
+        baseMinutes: number;
+        incrementSeconds: number;
+        timeLabel: string;
+      };
       const player = this.state.players.get(client.sessionId);
       if (!player) return;
 
       const board = this.state.boards.get(boardId);
       if (!board) {
         client.send('error', { message: 'Board not found' });
-        console.log(`[WorldRoom] join_board: board ${boardId} not found`);
         return;
       }
 
-      console.log(`[WorldRoom] join_board received: player=${playerName} board=${boardId} currentStatus=${board.status}`);
-
-      if (board.status === 'idle') {
-        board.status = 'waiting';
-        board.waitingPlayerId = player.id;
-        board.waitingPlayerName = playerName;
-        player.currentBoardId = boardId;
-        console.log(`[WorldRoom] Board ${boardId} status -> waiting (player: ${playerName})`);
-      } else if (board.status === 'waiting') {
-        if (board.waitingPlayerId === player.id) {
-          client.send('error', { message: 'Already waiting here' });
-          return;
-        }
-        this.startMatch(board, player, client);
-      } else {
-        client.send('error', { message: 'Board already in match' });
+      if (board.status !== 'idle') {
+        client.send('error', { message: 'Board is not available' });
+        return;
       }
+
+      board.status = 'waiting';
+      board.waitingPlayerId = player.id;
+      board.waitingPlayerName = player.username;
+      board.timeCategory = timeCategory;
+      board.baseMinutes = baseMinutes;
+      board.incrementSeconds = incrementSeconds;
+      board.timeLabel = timeLabel;
+      player.currentBoardId = boardId;
+
+      console.log(`[WorldRoom] create_challenge: ${player.username} at board ${boardId} (${timeLabel})`);
+      console.log(`[WorldRoom] Board ${boardId} status -> waiting`);
+    });
+
+    this.onMessage('accept_challenge', (client, data) => {
+      const { boardId } = data as { boardId: string };
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+
+      const board = this.state.boards.get(boardId);
+      if (!board) {
+        client.send('error', { message: 'Board not found' });
+        return;
+      }
+
+      if (board.status !== 'waiting') {
+        client.send('error', { message: 'No challenge to accept' });
+        return;
+      }
+
+      if (board.waitingPlayerId === player.id) {
+        client.send('error', { message: 'Cannot accept your own challenge' });
+        return;
+      }
+
+      console.log(`[WorldRoom] accept_challenge: ${player.username} accepting at board ${boardId}`);
+      this.startMatch(board, player, client);
     });
 
     this.onMessage('cancel_waiting', (client, data) => {
@@ -108,9 +139,7 @@ export class WorldRoom extends Room<WorldState> {
       const board = this.state.boards.get(boardId);
       if (!board || board.waitingPlayerId !== player.id) return;
 
-      board.status = 'idle';
-      board.waitingPlayerId = '';
-      board.waitingPlayerName = '';
+      this.resetBoard(board);
       player.currentBoardId = '';
       console.log(`[WorldRoom] Board ${boardId} status -> idle (cancelled by ${player.username})`);
     });
@@ -211,8 +240,6 @@ export class WorldRoom extends Room<WorldState> {
         createdAt: new Date().toISOString(),
       });
     });
-
-    console.log('[WorldRoom] Created');
   }
 
   onJoin(client: Client, options: JoinOptions) {
@@ -230,7 +257,7 @@ export class WorldRoom extends Room<WorldState> {
     player.isMoving = false;
 
     this.state.players.set(client.sessionId, player);
-    console.log(`[WorldRoom] Player joined: ${player.username} (${this.state.players.size} total)`);
+    console.log(`[WorldRoom] Player joined: ${player.username} (${this.state.players.size} total) roomId=${this.roomId}`);
   }
 
   onLeave(client: Client) {
@@ -238,9 +265,7 @@ export class WorldRoom extends Room<WorldState> {
     if (player) {
       this.state.boards.forEach((board) => {
         if (board.waitingPlayerId === player.id) {
-          board.status = 'idle';
-          board.waitingPlayerId = '';
-          board.waitingPlayerName = '';
+          this.resetBoard(board);
           console.log(`[WorldRoom] Board ${board.id} freed (player ${player.username} left)`);
         }
       });
@@ -256,6 +281,16 @@ export class WorldRoom extends Room<WorldState> {
   }
 
   private tick() {}
+
+  private resetBoard(board: BoardState) {
+    board.status = 'idle';
+    board.waitingPlayerId = '';
+    board.waitingPlayerName = '';
+    board.timeCategory = '';
+    board.baseMinutes = 0;
+    board.incrementSeconds = 0;
+    board.timeLabel = '';
+  }
 
   private startMatch(board: BoardState, joiningPlayer: PlayerState, joiningClient: Client) {
     const matchId = nanoid();
@@ -291,7 +326,7 @@ export class WorldRoom extends Room<WorldState> {
     }
     joiningClient.send('match_started', { matchId, boardId: board.id, color: 'b' });
 
-    console.log(`[WorldRoom] Match started: ${matchId} on board ${board.id}`);
+    console.log(`[WorldRoom] match_started: ${matchId} on board ${board.id}`);
     console.log(`[WorldRoom] Board ${board.id} status -> playing`);
   }
 
@@ -308,6 +343,10 @@ export class WorldRoom extends Room<WorldState> {
       board.whitePlayerId = '';
       board.blackPlayerId = '';
       board.matchId = '';
+      board.timeCategory = '';
+      board.baseMinutes = 0;
+      board.incrementSeconds = 0;
+      board.timeLabel = '';
     }
 
     this.broadcast('match_finished', { matchId, winnerId, reason });

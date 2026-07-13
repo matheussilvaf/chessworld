@@ -5,7 +5,7 @@ import type { Request, Response } from "express";
 
 const config: ConfigOptions = {
   initializeGameServer: (gameServer) => {
-    gameServer.define("world", WorldRoom);
+    gameServer.define("world", WorldRoom).filterBy(["region"]);
   },
 
   initializeExpress: (app) => {

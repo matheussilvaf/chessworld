@@ -37,7 +37,10 @@ export async function joinWorldRoom(options: {
     throw new Error('VITE_COLYSEUS_URL is not configured');
   }
 
+  console.log(`[Colyseus] joining world region: ${options.region}`);
   worldRoom = await getClient().joinOrCreate('world', options);
+  console.log(`[Colyseus] joined roomId: ${worldRoom.roomId}`);
+  console.log(`[Colyseus] sessionId: ${worldRoom.sessionId}`);
   return worldRoom;
 }
 
@@ -59,8 +62,20 @@ export function sendMovement(data: {
   worldRoom?.send('move_to', data);
 }
 
-export function sendBoardJoin(boardId: string, playerName: string) {
-  worldRoom?.send('join_board', { boardId, playerName });
+export function sendCreateChallenge(data: {
+  boardId: string;
+  timeCategory: string;
+  baseMinutes: number;
+  incrementSeconds: number;
+  timeLabel: string;
+}) {
+  worldRoom?.send('create_challenge', data);
+  console.log(`[Boards] challenge created: ${data.boardId} ${data.timeLabel}`);
+}
+
+export function sendAcceptChallenge(boardId: string) {
+  worldRoom?.send('accept_challenge', { boardId });
+  console.log(`[Boards] challenge accepted: ${boardId}`);
 }
 
 export function sendBoardCancel(boardId: string) {
@@ -89,4 +104,5 @@ export function sendChat(message: string) {
 
 export function registerBoards(boards: { id: string; name: string; x: number; y: number; width?: number; height?: number }[]) {
   worldRoom?.send('register_boards', { boards });
+  console.log(`[Boards] boards registered: ${boards.length}`);
 }

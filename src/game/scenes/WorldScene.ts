@@ -468,7 +468,7 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
-  public updateBoardStatus(arenaId: string, status: string) {
+  public updateBoardStatus(arenaId: string, status: string, info?: { playerName?: string; timeLabel?: string }) {
     const arena = this.arenas.find(a => a.id === arenaId || a.title === arenaId || a.name === arenaId);
     if (!arena) return;
 
@@ -481,24 +481,34 @@ export class WorldScene extends Phaser.Scene {
     const cy = arena.y + arena.height / 2;
 
     if (status === 'waiting') {
-      const container = this.add.container(cx, cy - 20).setDepth(150);
-      const bannerW = Math.max(arena.width + 8, 70);
-      const bannerH = 16;
+      const container = this.add.container(cx, cy - 24).setDepth(150);
+      const bannerW = Math.max(arena.width + 16, 80);
+      const bannerH = info?.playerName ? 28 : 16;
       const bg = this.add.graphics();
       bg.fillStyle(0xd97706, 0.92);
       bg.fillRoundedRect(-bannerW / 2, -bannerH / 2, bannerW, bannerH, 3);
       bg.lineStyle(1, 0xfbbf24, 1);
       bg.strokeRoundedRect(-bannerW / 2, -bannerH / 2, bannerW, bannerH, 3);
 
-      const label = this.add.text(0, 0, 'AWAITING DUEL', {
+      const label = this.add.text(0, info?.playerName ? -5 : 0, 'Waiting for duel', {
         fontFamily: 'Arial, sans-serif',
-        fontSize: '9px',
+        fontSize: '8px',
         fontStyle: 'bold',
         color: '#ffffff',
         resolution: 2,
       }).setOrigin(0.5);
-
       container.add([bg, label]);
+
+      if (info?.playerName) {
+        const subText = info.timeLabel ? `${info.playerName} - ${info.timeLabel}` : info.playerName;
+        const sub = this.add.text(0, 7, subText, {
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '7px',
+          color: '#fde68a',
+          resolution: 2,
+        }).setOrigin(0.5);
+        container.add(sub);
+      }
 
       this.tweens.add({
         targets: container,
@@ -520,7 +530,7 @@ export class WorldScene extends Phaser.Scene {
       bg.lineStyle(1, 0x60a5fa, 1);
       bg.strokeRoundedRect(-bannerW / 2, -bannerH / 2, bannerW, bannerH, 3);
 
-      const label = this.add.text(0, 0, 'MATCH IN PROGRESS', {
+      const label = this.add.text(0, 0, 'In match', {
         fontFamily: 'Arial, sans-serif',
         fontSize: '8px',
         fontStyle: 'bold',
