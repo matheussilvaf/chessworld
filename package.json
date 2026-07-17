@@ -11,7 +11,8 @@
     "start": "NODE_ENV=production tsx server/index.ts",
     "lint": "eslint .",
     "preview": "npm run build && npm run start",
-    "typecheck": "tsc --noEmit -p tsconfig.app.json"
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "validate:world-maps": "node scripts/validate-world-maps.mjs"
   },
   "dependencies": {
     "@colyseus/core": "^0.15.0",
