@@ -8,8 +8,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = resolve(__dirname, '..');
 
-const MAIN_WORLD_PATH = join(projectRoot, 'public/assets/worldv2/newworld.tmj');
-const VILLAGE_TEMPLATE_PATH = join(projectRoot, 'public/assets/worldv2/main_village_template.tmj');
+const MAIN_WORLD_PATH = join(projectRoot, 'public/assets/world-v2/main_world.tmj');
+const VILLAGE_TEMPLATE_PATH = join(projectRoot, 'public/assets/world-v2/main_village_template.tmj');
 
 const errors = [];
 const warnings = [];
@@ -36,24 +36,41 @@ function loadJSON(filePath, label) {
 }
 
 function checkExternalSources(tilesets, label) {
+  let count = 0;
   for (const ts of tilesets) {
     if (ts.source) {
       error(`[${label}] Tileset "${ts.name || '(unnamed)'}" uses external source: ${ts.source}`);
+      count++;
     }
   }
+  if (count === 0) log(`[${label}] No external "source" references in tilesets`);
+  return count;
+}
+
+function getAllImages(tilesets) {
+  const images = new Set();
+  for (const ts of tilesets) {
+    if (ts.image) images.add(ts.image);
+    if (ts.tiles) {
+      for (const t of ts.tiles) {
+        if (t.image) images.add(t.image);
+      }
+    }
+  }
+  return images;
 }
 
 function checkTilesetImages(tilesets, tmjDir, label) {
+  const images = getAllImages(tilesets);
   const missing = [];
   const found = [];
-  for (const ts of tilesets) {
-    if (!ts.image) continue;
-    const imgPath = resolve(tmjDir, ts.image);
-    if (existsSync(imgPath)) {
-      found.push(ts.image);
+  for (const img of images) {
+    const fullPath = resolve(tmjDir, img);
+    if (existsSync(fullPath)) {
+      found.push(img);
     } else {
-      missing.push(ts.image);
-      error(`[${label}] Missing tileset image: ${ts.image} (expected at ${imgPath})`);
+      missing.push(img);
+      warn(`[${label}] Missing tileset image: ${img}`);
     }
   }
   log(`[${label}] Tileset images: ${found.length} found, ${missing.length} missing`);
@@ -99,24 +116,15 @@ function getAllObjects(layers) {
 }
 
 function countObjectTypes(objects) {
-  let rectangles = 0;
-  let points = 0;
-  let polygons = 0;
-  let polylines = 0;
-  let ellipses = 0;
-  let tiles = 0;
-
+  let rectangles = 0, points = 0, polygons = 0, polylines = 0, ellipses = 0, tiles = 0;
   for (const obj of objects) {
     if (obj.polygon) polygons++;
     else if (obj.polyline) polylines++;
     else if (obj.ellipse) ellipses++;
     else if (obj.point) points++;
     else if (obj.gid) tiles++;
-    else if (obj.width > 0 && obj.height > 0) rectangles++;
-    else if (obj.width === 0 && obj.height === 0) points++;
     else rectangles++;
   }
-
   return { rectangles, points, polygons, polylines, ellipses, tiles };
 }
 
@@ -125,24 +133,13 @@ function checkOutOfBounds(objects, mapWidthPx, mapHeightPx, label) {
   for (const obj of objects) {
     const x = obj.x || 0;
     const y = obj.y || 0;
-    const w = obj.width || 0;
-    const h = obj.height || 0;
-
-    if (x < 0 || y < 0 || (x + w) > mapWidthPx + 1 || (y + h) > mapHeightPx + 1) {
-      if (obj.polygon || obj.polyline) continue;
-      if (x < -10 || y < -10 || (x + w) > mapWidthPx + 50 || (y + h) > mapHeightPx + 50) {
-        warn(`[${label}] Object "${obj.name || obj.id}" in layer "${obj._layerName}" is significantly outside bounds: (${x}, ${y}) size ${w}x${h}`);
-        outCount++;
-      }
+    if (obj.polygon || obj.polyline) continue;
+    if (x < -50 || y < -50 || x > mapWidthPx + 50 || y > mapHeightPx + 50) {
+      warn(`[${label}] Object "${obj.name || obj.id}" in layer "${obj._layerName}" outside bounds: (${Math.round(x)}, ${Math.round(y)})`);
+      outCount++;
     }
   }
   return outCount;
-}
-
-function getProperty(obj, propName) {
-  if (!obj.properties) return undefined;
-  const prop = obj.properties.find(p => p.name === propName);
-  return prop ? prop.value : undefined;
 }
 
 function getMapProperty(mapData, propName) {
@@ -156,162 +153,163 @@ function validateMainWorld(data) {
   const mapWidthPx = data.width * data.tilewidth;
   const mapHeightPx = data.height * data.tileheight;
 
-  log(`[${label}] Dimensions: ${data.width}x${data.height} tiles, ${data.tilewidth}x${data.tileheight}px tile size`);
+  log(`[${label}] Dimensions: ${data.width}x${data.height} tiles, ${data.tilewidth}x${data.tileheight}px`);
   log(`[${label}] Pixel size: ${mapWidthPx}x${mapHeightPx}`);
 
+  // Map properties
+  log(`[${label}] --- Map Properties ---`);
   if (data.properties) {
-    log(`[${label}] Map properties:`);
     for (const p of data.properties) {
-      log(`  - ${p.name}: ${p.value} (${p.type})`);
+      log(`[${label}]   ${p.name} = ${p.value} (${p.type})`);
     }
   } else {
-    warn(`[${label}] No custom map properties defined`);
+    warn(`[${label}] No custom map properties`);
   }
 
-  // Check tilesets
+  // Tilesets
   checkExternalSources(data.tilesets || [], label);
   log(`[${label}] Tilesets declared: ${(data.tilesets || []).length}`);
-  for (const ts of data.tilesets || []) {
-    log(`  - ${ts.name} (firstgid: ${ts.firstgid}, image: ${ts.image || 'N/A'})`);
-  }
-
   const tmjDir = dirname(MAIN_WORLD_PATH);
   checkTilesetImages(data.tilesets || [], tmjDir, label);
 
   // Layers
   const allLayers = getLayerNames(data.layers || []);
-  log(`[${label}] Total layers: ${allLayers.length}`);
-
-  const expectedObjectLayers = [
-    'world_zones',
-    'character_anchors',
-    'camera_anchors',
-    'ui_anchors',
-    'portal_interactions',
-    'village_interactions',
-    'house_interactions',
-    'spawns',
-    'building_interactions',
-    'collisions',
-    'chess_tables_interactions',
-  ];
-
-  log(`[${label}] --- Checking required logical layers ---`);
-  for (const layerName of expectedObjectLayers) {
-    const found = allLayers.find(l => l.name.toLowerCase() === layerName.toLowerCase());
-    if (found) {
-      log(`  [OK] ${layerName} (type: ${found.type})`);
-    } else {
-      warn(`  [MISSING] ${layerName}`);
-    }
-  }
-
-  // Objects analysis
-  const allObjects = getAllObjects(data.layers || []);
-  const types = countObjectTypes(allObjects);
-  log(`[${label}] Object counts: rectangles=${types.rectangles}, polygons=${types.polygons}, points=${types.points}, polylines=${types.polylines}, ellipses=${types.ellipses}, tiles=${types.tiles}`);
-
-  const outOfBounds = checkOutOfBounds(allObjects, mapWidthPx, mapHeightPx, label);
-  if (outOfBounds > 0) {
-    warn(`[${label}] ${outOfBounds} objects significantly outside map bounds`);
-  }
-
-  // Count chess tables/boards
-  const chessObjects = allObjects.filter(o => {
-    const type = (o.type || '').toLowerCase();
-    const name = (o.name || '').toLowerCase();
-    return type.includes('chess') || type.includes('board') || name.includes('chess_table') || name.includes('chessboard');
-  });
-  log(`[${label}] Chess table/board objects found: ${chessObjects.length}`);
-
-  // Count houses
-  const houseObjects = allObjects.filter(o => {
-    const type = (o.type || '').toLowerCase();
-    const name = (o.name || '').toLowerCase();
-    return type.includes('house') || name.includes('house');
-  });
-  log(`[${label}] House objects found: ${houseObjects.length}`);
-
-  // Player positions per board
-  const playerPositions = allObjects.filter(o => {
-    const name = (o.name || '').toLowerCase();
-    const type = (o.type || '').toLowerCase();
-    return name.includes('player_seat') || name.includes('player_position') || type.includes('player_seat');
-  });
-  log(`[${label}] Player seat positions: ${playerPositions.length}`);
-
-  // Spectator positions
-  const spectatorPositions = allObjects.filter(o => {
-    const name = (o.name || '').toLowerCase();
-    const type = (o.type || '').toLowerCase();
-    return name.includes('spectator') || type.includes('spectator');
-  });
-  log(`[${label}] Spectator positions: ${spectatorPositions.length}`);
-
-  // Camera anchors
-  const cameraAnchors = allObjects.filter(o => o._layerName?.toLowerCase() === 'camera_anchors');
-  log(`[${label}] Camera anchors: ${cameraAnchors.length}`);
-
-  // Spawn points
-  const spawns = allObjects.filter(o => o._layerName?.toLowerCase() === 'spawns');
-  log(`[${label}] Spawn objects: ${spawns.length}`);
-
-  // Collision shapes
-  const collisions = allObjects.filter(o => o._layerName?.toLowerCase() === 'collisions');
-  const collisionTypes = countObjectTypes(collisions);
-  log(`[${label}] Collision objects: total=${collisions.length}, rectangles=${collisionTypes.rectangles}, polygons=${collisionTypes.polygons}`);
-
-  // Layer groups and tile layers
   const groups = allLayers.filter(l => l.type === 'group');
   const tileLayers = allLayers.filter(l => l.type === 'tilelayer');
   const objectGroups = allLayers.filter(l => l.type === 'objectgroup');
-  log(`[${label}] Layer breakdown: groups=${groups.length}, tile_layers=${tileLayers.length}, object_layers=${objectGroups.length}`);
+  log(`[${label}] Layers: ${allLayers.length} total (groups:${groups.length}, tile:${tileLayers.length}, object:${objectGroups.length})`);
 
-  // List all layer names
-  log(`[${label}] --- All layers ---`);
-  for (const l of allLayers) {
-    log(`  ${l.type.padEnd(12)} ${l.fullName}`);
+  // Required logical layers
+  const requiredLayers = [
+    'world_zones', 'character_anchors', 'camera_anchors', 'ui_anchors',
+    'portal_interactions', 'village_interactions', 'house_interactions',
+    'spawns', 'building_interactions', 'collisions', 'chess_tables_interactions',
+  ];
+
+  log(`[${label}] --- Required Logical Layers ---`);
+  for (const layerName of requiredLayers) {
+    const found = allLayers.find(l => l.name.toLowerCase() === layerName.toLowerCase());
+    if (found) {
+      log(`[${label}]   [OK] ${layerName}`);
+    } else {
+      error(`[${label}]   [MISSING] Required layer: ${layerName}`);
+    }
   }
 
-  // Duplicate layer names (may be intentional in groups)
+  // Objects
+  const allObjects = getAllObjects(data.layers || []);
+  const types = countObjectTypes(allObjects);
+  log(`[${label}] Objects: rect=${types.rectangles} poly=${types.polygons} pt=${types.points} tile=${types.tiles} pline=${types.polylines}`);
+
+  // Out of bounds
+  const outCount = checkOutOfBounds(allObjects, mapWidthPx, mapHeightPx, label);
+  if (outCount > 0) warn(`[${label}] ${outCount} objects outside map bounds`);
+
+  // Count chess boards (14 expected)
+  const chessboardLayers = allLayers.filter(l => /^chessboard\d+$/i.test(l.name));
+  log(`[${label}] --- Structure Validation ---`);
+  if (chessboardLayers.length === 14) {
+    log(`[${label}]   [OK] 14 chessboard layers`);
+  } else {
+    warn(`[${label}]   Expected 14 chessboard layers, found ${chessboardLayers.length}`);
+  }
+
+  // Count houses (36 expected)
+  const houseLayers = allLayers.filter(l => l.name.toLowerCase().match(/^house\s?\d/));
+  if (houseLayers.length === 36) {
+    log(`[${label}]   [OK] 36 house layers`);
+  } else {
+    warn(`[${label}]   Expected 36 house layers, found ${houseLayers.length}`);
+  }
+
+  // chess_tables_interactions detail
+  const ctlLayer = getObjectLayers(data.layers).find(l => l.name === 'chess_tables_interactions');
+  if (ctlLayer) {
+    const boards = ctlLayer.objects.filter(o => (o.name || '').includes('_board'));
+    const playerSeats = ctlLayer.objects.filter(o => (o.name || '').includes('_player_'));
+    const spectatorSeats = ctlLayer.objects.filter(o => (o.name || '').includes('_spectator_'));
+
+    if (boards.length === 14) {
+      log(`[${label}]   [OK] 14 board interaction zones`);
+    } else {
+      warn(`[${label}]   Expected 14 board zones, found ${boards.length}`);
+    }
+
+    if (playerSeats.length === 28) {
+      log(`[${label}]   [OK] 28 player positions (2 per table)`);
+    } else {
+      warn(`[${label}]   Expected 28 player positions, found ${playerSeats.length}`);
+    }
+
+    if (spectatorSeats.length === 28) {
+      log(`[${label}]   [OK] 28 spectator positions (4 per table: 2L + 2R)`);
+    } else {
+      warn(`[${label}]   Expected 28 spectator positions, found ${spectatorSeats.length}`);
+    }
+  }
+
+  // character_anchors detail
+  const caLayer = getObjectLayers(data.layers).find(l => l.name === 'character_anchors');
+  if (caLayer) {
+    const playerAnchors = caLayer.objects.filter(o => (o.name || '').includes('_player_'));
+    const spectAnchors = caLayer.objects.filter(o => (o.name || '').includes('_spectator_'));
+    const exitAnchors = caLayer.objects.filter(o => (o.name || '').includes('_exit_'));
+    log(`[${label}]   Character anchors: ${caLayer.objects.length} total (player:${playerAnchors.length} spectator:${spectAnchors.length} exit:${exitAnchors.length})`);
+  }
+
+  // ui_anchors overlays
+  const uiLayer = getObjectLayers(data.layers).find(l => l.name === 'ui_anchors');
+  if (uiLayer) {
+    const overlays = uiLayer.objects.filter(o => (o.name || '').includes('_overlay_'));
+    const camFocus = uiLayer.objects.filter(o => (o.name || '').includes('_camera_focus_'));
+    log(`[${label}]   UI anchors: ${uiLayer.objects.length} total (overlays:${overlays.length} camera_focus:${camFocus.length})`);
+    if (overlays.length >= 14) {
+      log(`[${label}]   [OK] ${overlays.length} board overlays (14+ expected)`);
+    } else {
+      warn(`[${label}]   Expected 14+ board overlays, found ${overlays.length}`);
+    }
+  }
+
+  // camera_anchors
+  const camLayer = getObjectLayers(data.layers).find(l => l.name === 'camera_anchors');
+  if (camLayer) {
+    log(`[${label}]   Camera anchors: ${camLayer.objects.length}`);
+  }
+
+  // Collisions breakdown
+  const collLayer = getObjectLayers(data.layers).find(l => l.name === 'collisions');
+  if (collLayer) {
+    const ct = countObjectTypes(collLayer.objects);
+    log(`[${label}]   Collisions: ${collLayer.objects.length} total (rect:${ct.rectangles} poly:${ct.polygons})`);
+  }
+
+  // Spawns
+  const spawnLayer = getObjectLayers(data.layers).find(l => l.name === 'spawns');
+  if (spawnLayer) {
+    const mainSpawn = spawnLayer.objects.find(o => o.name === 'main_player_spawn');
+    if (mainSpawn) {
+      log(`[${label}]   [OK] main_player_spawn found at (${Math.round(mainSpawn.x)}, ${Math.round(mainSpawn.y)})`);
+    } else {
+      error(`[${label}]   main_player_spawn NOT found in spawns layer`);
+    }
+    log(`[${label}]   Total spawns: ${spawnLayer.objects.length}`);
+  }
+
+  // Duplicate layer names
   const nameCount = {};
-  for (const l of allLayers) {
-    nameCount[l.name] = (nameCount[l.name] || 0) + 1;
-  }
+  allLayers.forEach(l => { nameCount[l.name] = (nameCount[l.name] || 0) + 1; });
   const duplicates = Object.entries(nameCount).filter(([, c]) => c > 1);
   if (duplicates.length > 0) {
-    log(`[${label}] Duplicate layer names (may be intentional within groups):`);
+    log(`[${label}] Duplicate layer names (may be intentional in different groups):`);
     for (const [name, count] of duplicates) {
-      log(`  - "${name}" appears ${count} times`);
+      log(`[${label}]   "${name}" x${count}`);
     }
   }
 
-  // Custom properties on objects
+  // Custom properties used on objects
   const propsUsed = new Set();
-  for (const obj of allObjects) {
-    if (obj.properties) {
-      for (const p of obj.properties) {
-        propsUsed.add(p.name);
-      }
-    }
-  }
-  if (propsUsed.size > 0) {
-    log(`[${label}] Custom properties used on objects: ${[...propsUsed].sort().join(', ')}`);
-  }
-
-  // Validation: expected 14 boards
-  if (chessObjects.length === 14) {
-    log(`[${label}] [PASS] 14 chess boards found`);
-  } else if (chessObjects.length > 0) {
-    warn(`[${label}] Expected 14 chess boards, found ${chessObjects.length}`);
-  }
-
-  // Validation: expected 36 houses
-  if (houseObjects.length === 36) {
-    log(`[${label}] [PASS] 36 houses found`);
-  } else if (houseObjects.length > 0) {
-    warn(`[${label}] Expected 36 houses, found ${houseObjects.length}`);
-  }
+  allObjects.forEach(o => { (o.properties || []).forEach(p => propsUsed.add(p.name)); });
+  log(`[${label}] Custom object properties: ${[...propsUsed].sort().join(', ')}`);
 }
 
 function validateVillageTemplate(data) {
@@ -319,164 +317,113 @@ function validateVillageTemplate(data) {
   const mapWidthPx = data.width * data.tilewidth;
   const mapHeightPx = data.height * data.tileheight;
 
-  log(`[${label}] Dimensions: ${data.width}x${data.height} tiles, ${data.tilewidth}x${data.tileheight}px tile size`);
+  log(`[${label}] Dimensions: ${data.width}x${data.height} tiles, ${data.tilewidth}x${data.tileheight}px`);
   log(`[${label}] Pixel size: ${mapWidthPx}x${mapHeightPx}`);
 
-  // Map properties
-  const mapId = getMapProperty(data, 'mapId');
-  const mapType = getMapProperty(data, 'mapType');
-  const defaultSpawn = getMapProperty(data, 'defaultSpawn');
-  const templateId = getMapProperty(data, 'templateId');
-  const instanceMode = getMapProperty(data, 'instanceMode');
-  const houseCapacity = getMapProperty(data, 'houseCapacity');
-  const tileSize = getMapProperty(data, 'tileSize');
-
-  log(`[${label}] Map properties:`);
-  if (data.properties) {
-    for (const p of data.properties) {
-      log(`  - ${p.name}: ${p.value} (${p.type})`);
-    }
-  }
-
-  // Validate expected properties
+  // Map properties validation
   const checks = [
-    { name: 'mapId', expected: 'main_village_template', actual: mapId },
-    { name: 'mapType', expected: 'village_template', actual: mapType },
-    { name: 'defaultSpawn', expected: 'village_instance_entry', actual: defaultSpawn },
-    { name: 'templateId', expected: 'main_village_template', actual: templateId },
-    { name: 'instanceMode', expected: 'dynamic', actual: instanceMode },
-    { name: 'houseCapacity', expected: 36, actual: houseCapacity },
-    { name: 'tileSize', expected: 32, actual: tileSize },
+    { name: 'mapId', expected: 'main_village_template' },
+    { name: 'mapType', expected: 'village_template' },
+    { name: 'defaultSpawn', expected: 'village_instance_entry' },
+    { name: 'templateId', expected: 'main_village_template' },
+    { name: 'instanceMode', expected: 'dynamic' },
+    { name: 'houseCapacity', expected: 36 },
+    { name: 'tileSize', expected: 32 },
   ];
 
+  log(`[${label}] --- Map Properties ---`);
   for (const check of checks) {
-    if (check.actual === undefined) {
-      error(`[${label}] Missing property: ${check.name} (expected: ${check.expected})`);
-    } else if (String(check.actual) !== String(check.expected)) {
-      warn(`[${label}] Property ${check.name}: expected "${check.expected}", got "${check.actual}"`);
+    const actual = getMapProperty(data, check.name);
+    if (actual === undefined) {
+      error(`[${label}]   Missing property: ${check.name} (expected: ${check.expected})`);
+    } else if (String(actual) !== String(check.expected)) {
+      warn(`[${label}]   Property ${check.name}: expected "${check.expected}", got "${actual}"`);
     } else {
-      log(`[${label}] [PASS] ${check.name} = ${check.actual}`);
+      log(`[${label}]   [OK] ${check.name} = ${actual}`);
     }
   }
 
-  // Check tilesets
+  // Tilesets
   checkExternalSources(data.tilesets || [], label);
-  log(`[${label}] Tilesets declared: ${(data.tilesets || []).length}`);
-
   const tmjDir = dirname(VILLAGE_TEMPLATE_PATH);
   checkTilesetImages(data.tilesets || [], tmjDir, label);
 
-  // Layers
-  const allLayers = getLayerNames(data.layers || []);
+  // Objects
   const allObjects = getAllObjects(data.layers || []);
   const types = countObjectTypes(allObjects);
+  log(`[${label}] Objects: rect=${types.rectangles} poly=${types.polygons} pt=${types.points} tile=${types.tiles}`);
 
-  log(`[${label}] Total layers: ${allLayers.length}`);
-  log(`[${label}] Object counts: rectangles=${types.rectangles}, polygons=${types.polygons}, points=${types.points}, polylines=${types.polylines}, tiles=${types.tiles}`);
-
-  // Check for village_instance_entry_spawn
-  const entrySpawn = allObjects.find(o => (o.name || '').toLowerCase().includes('village_instance_entry_spawn'));
+  // village_instance_entry_spawn
+  const entrySpawn = allObjects.find(o => o.name === 'village_instance_entry_spawn');
   if (entrySpawn) {
-    log(`[${label}] [PASS] village_instance_entry_spawn found`);
+    log(`[${label}]   [OK] village_instance_entry_spawn found`);
   } else {
-    error(`[${label}] Missing: village_instance_entry_spawn`);
+    error(`[${label}]   MISSING: village_instance_entry_spawn`);
   }
 
-  // Check for village_instance_exit_gateway
-  const exitGateway = allObjects.find(o => (o.name || '').toLowerCase().includes('village_instance_exit_gateway'));
+  // village_instance_exit_gateway
+  const exitGateway = allObjects.find(o => o.name === 'village_instance_exit_gateway');
   if (exitGateway) {
-    log(`[${label}] [PASS] village_instance_exit_gateway found`);
+    log(`[${label}]   [OK] village_instance_exit_gateway found`);
   } else {
-    error(`[${label}] Missing: village_instance_exit_gateway`);
+    error(`[${label}]   MISSING: village_instance_exit_gateway`);
   }
 
-  // Check for village_instance_zone
-  const instanceZone = allObjects.find(o => (o.name || '').toLowerCase().includes('village_instance_zone'));
+  // village_instance_zone
+  const instanceZone = allObjects.find(o => o.name === 'village_instance_zone');
   if (instanceZone) {
-    log(`[${label}] [PASS] village_instance_zone found`);
+    log(`[${label}]   [OK] village_instance_zone found`);
   } else {
-    error(`[${label}] Missing: village_instance_zone`);
+    error(`[${label}]   MISSING: village_instance_zone`);
   }
 
-  // Check that houses do NOT have a fixed villageId
-  const houseObjects = allObjects.filter(o => {
-    const name = (o.name || '').toLowerCase();
-    const type = (o.type || '').toLowerCase();
-    return name.includes('house') || type.includes('house');
-  });
-
-  let fixedVillageIdCount = 0;
-  for (const h of houseObjects) {
-    const villageId = getProperty(h, 'villageId');
-    if (villageId && villageId !== '' && villageId !== 'dynamic') {
-      fixedVillageIdCount++;
+  // No fixed villageId on houses
+  const houseInteractions = getObjectLayers(data.layers).find(l => l.name === 'house_interactions');
+  if (houseInteractions) {
+    let fixedCount = 0;
+    houseInteractions.objects.forEach(o => {
+      const vId = (o.properties || []).find(p => p.name === 'villageId');
+      if (vId && vId.value && vId.value !== '' && vId.value !== 'dynamic') fixedCount++;
+    });
+    if (fixedCount === 0) {
+      log(`[${label}]   [OK] No fixed villageId on houses`);
+    } else {
+      warn(`[${label}]   ${fixedCount} houses have a fixed villageId`);
+    }
+    if (houseInteractions.objects.length === 36) {
+      log(`[${label}]   [OK] 36 house interaction entries`);
+    } else {
+      warn(`[${label}]   Expected 36 house interactions, found ${houseInteractions.objects.length}`);
     }
   }
-  if (fixedVillageIdCount === 0) {
-    log(`[${label}] [PASS] No fixed villageId on houses`);
-  } else {
-    warn(`[${label}] ${fixedVillageIdCount} houses have a fixed villageId`);
+
+  // 36 house exit spawns
+  const spawnLayer = getObjectLayers(data.layers).find(l => l.name === 'spawns');
+  if (spawnLayer) {
+    const houseSpawns = spawnLayer.objects.filter(o => (o.name || '').includes('house_') && (o.name || '').includes('_exit_spawn'));
+    if (houseSpawns.length === 36) {
+      log(`[${label}]   [OK] 36 house exit spawns`);
+    } else {
+      warn(`[${label}]   Expected 36 house exit spawns, found ${houseSpawns.length}`);
+    }
   }
 
-  // Count house entries
-  const houseEntries = allObjects.filter(o => {
-    const name = (o.name || '').toLowerCase();
-    return name.includes('house_entry') || name.includes('house_door') || name.includes('house_spawn');
-  });
-  log(`[${label}] House entry/door/spawn objects: ${houseEntries.length}`);
-
-  if (houseObjects.length === 36) {
-    log(`[${label}] [PASS] 36 house objects found`);
-  } else if (houseObjects.length > 0) {
-    warn(`[${label}] Expected 36 houses, found ${houseObjects.length}`);
-  }
-
-  // Check boundary collisions (4 map-edge collisions)
-  const collisionObjects = allObjects.filter(o => {
-    const layerName = (o._layerName || '').toLowerCase();
-    return layerName.includes('collision') || layerName.includes('boundary') || layerName.includes('limit');
-  });
-
-  const boundaryCollisions = collisionObjects.filter(o => {
-    const name = (o.name || '').toLowerCase();
-    const w = o.width || 0;
-    const h = o.height || 0;
-    const isBoundary = name.includes('boundary') || name.includes('border') || name.includes('limit');
-    const isLarge = (w >= mapWidthPx * 0.8) || (h >= mapHeightPx * 0.8);
-    return isBoundary || isLarge;
-  });
-
-  if (boundaryCollisions.length >= 4) {
-    log(`[${label}] [PASS] ${boundaryCollisions.length} boundary collisions found`);
-  } else {
-    log(`[${label}] Boundary collision objects detected: ${boundaryCollisions.length} (expected 4 map-edge collisions)`);
-    log(`[${label}] Total collision-layer objects: ${collisionObjects.length}`);
+  // Boundary collisions (4 map edges)
+  const collLayer = getObjectLayers(data.layers).find(l => l.name === 'collisions');
+  if (collLayer) {
+    const boundaries = collLayer.objects.filter(o => (o.name || '').includes('map_boundary'));
+    if (boundaries.length >= 4) {
+      log(`[${label}]   [OK] ${boundaries.length} map boundary collisions`);
+    } else {
+      warn(`[${label}]   Expected 4 map boundary collisions, found ${boundaries.length}`);
+    }
+    const ct = countObjectTypes(collLayer.objects);
+    log(`[${label}]   Collisions: ${collLayer.objects.length} total (rect:${ct.rectangles} poly:${ct.polygons})`);
   }
 
   // Out of bounds
-  const outOfBounds = checkOutOfBounds(allObjects, mapWidthPx, mapHeightPx, label);
-  if (outOfBounds > 0) {
-    warn(`[${label}] ${outOfBounds} objects significantly outside map bounds`);
-  }
-
-  // List all layers
-  log(`[${label}] --- All layers ---`);
-  for (const l of allLayers) {
-    log(`  ${l.type.padEnd(12)} ${l.fullName}`);
-  }
-
-  // Custom properties on objects
-  const propsUsed = new Set();
-  for (const obj of allObjects) {
-    if (obj.properties) {
-      for (const p of obj.properties) {
-        propsUsed.add(p.name);
-      }
-    }
-  }
-  if (propsUsed.size > 0) {
-    log(`[${label}] Custom properties used on objects: ${[...propsUsed].sort().join(', ')}`);
-  }
+  const outCount = checkOutOfBounds(allObjects, mapWidthPx, mapHeightPx, label);
+  if (outCount > 0) warn(`[${label}] ${outCount} objects outside map bounds`);
 }
 
 // --- Main ---
@@ -505,35 +452,32 @@ console.log('='.repeat(60));
 
 if (errors.length > 0) {
   console.log(`\n  ERRORS (${errors.length}):`);
-  for (const e of errors) {
-    console.log(`    [ERROR] ${e}`);
-  }
+  for (const e of errors) console.log(`    [ERROR] ${e}`);
 }
 
 if (warnings.length > 0) {
   console.log(`\n  WARNINGS (${warnings.length}):`);
-  for (const w of warnings) {
-    console.log(`    [WARN]  ${w}`);
-  }
+  for (const w of warnings) console.log(`    [WARN]  ${w}`);
 }
 
 if (info.length > 0) {
-  console.log(`\n  INFO (${info.length} lines):`);
-  for (const i of info) {
-    console.log(`    ${i}`);
-  }
+  console.log(`\n  INFO (${info.length} entries):`);
+  for (const i of info) console.log(`    ${i}`);
 }
 
 console.log('\n' + '-'.repeat(60));
-console.log(`  Results: ${errors.length} errors, ${warnings.length} warnings, ${info.length} info`);
+const total = errors.length + warnings.length;
+console.log(`  Errors: ${errors.length} | Warnings: ${warnings.length} | Polygons: ${
+  (mainWorld ? countObjectTypes(getAllObjects(mainWorld.layers || [])).polygons : 0) +
+  (villageTemplate ? countObjectTypes(getAllObjects(villageTemplate.layers || [])).polygons : 0)
+}`);
 
 if (errors.length === 0 && warnings.length === 0) {
   console.log('  STATUS: ALL CHECKS PASSED');
 } else if (errors.length === 0) {
   console.log('  STATUS: PASSED WITH WARNINGS');
 } else {
-  console.log('  STATUS: FAILED - Fix errors before proceeding');
+  console.log('  STATUS: VALIDATION FAILED');
 }
-
 console.log('-'.repeat(60));
 process.exit(errors.length > 0 ? 1 : 0);

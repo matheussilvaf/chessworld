@@ -1,15 +1,15 @@
 # Chess World v2 - Map Migration Audit Report
 
-**Date:** 2026-07-17  
-**Status:** Architecture analysis complete. New map files NOT YET on disk.
+**Date:** 2026-07-17
+**Status:** Audit complete. Migration NOT yet started. Old map remains active.
 
 ---
 
-## 1. Current Architecture
+## 1. Arquitetura Atual
 
-### Framework & Versions
+### Framework e Versoes
 
-| Technology | Version | Role |
+| Tecnologia | Versao | Funcao |
 |---|---|---|
 | Phaser | ^4.2.0 | Game engine (Arcade Physics) |
 | React | ^18.3.1 | UI layer |
@@ -17,121 +17,199 @@
 | LiveKit | ^2.20.1 | Voice chat |
 | Supabase | ^2.57.4 | Auth, presence, data |
 | Zustand | ^5.0.14 | State management |
-| Vite | ^5.4.2 | Bundler / dev server |
+| Vite | ^5.4.2 | Build tool |
 
-### Key Files
+### Arquivos-Chave
 
-| Purpose | File |
+| Funcao | Arquivo |
 |---|---|
-| Phaser game instance | `src/game/PhaserGame.ts` |
-| Main scene | `src/game/scenes/WorldScene.ts` |
-| Map config | `src/game/config/mapConfig.ts` |
-| Player config | `src/game/config/playerConfig.ts` |
-| Asset loading | Within `WorldScene.preload()` |
-| Legacy map layout | `src/game/map/mapLayout.ts` |
-| Legacy decorations | `src/game/map/decorations.ts` |
-| Multiplayer client | `src/game/network/colyseusClient.ts` |
-| Interpolation | `src/game/network/interpolation.ts` |
+| Instancia Phaser | `src/game/PhaserGame.ts` |
+| Scene principal | `src/game/scenes/WorldScene.ts` |
+| Configuracao do mapa | `src/game/config/mapConfig.ts` |
+| Config do jogador | `src/game/config/playerConfig.ts` |
+| Layout legado (coords fixas) | `src/game/map/mapLayout.ts` |
+| Decoracoes legado | `src/game/map/decorations.ts` |
+| Colyseus client | `src/game/network/colyseusClient.ts` |
+| Interpolacao | `src/game/network/interpolation.ts` |
 | Server room | `server/src/rooms/WorldRoom.ts` |
 | Server state | `server/src/schemas/WorldState.ts` |
 | Voice client | `src/game/voice/livekitVoiceClient.ts` |
 | Chat hook | `src/hooks/useRealtimeChat.ts` |
-| Game config constants | `src/config/game.ts` |
+| Constantes do jogo | `src/config/game.ts` |
 
-### How the Old Map is Loaded
+### Como o Mapa Antigo e Carregado
 
-1. **Preload** (`WorldScene.preload`):
-   - `this.load.tilemapTiledJSON('world', '/assets/ChessWorldMap/world.tmj')`
-   - 21 tileset images loaded individually from `/assets/ChessWorldMap/sprites/`
-   - Player spritesheet loaded separately
+**Preload** (`WorldScene.preload`, linha 62-98):
+- `this.load.tilemapTiledJSON('world', '/assets/ChessWorldMap/world.tmj')`
+- 21 tilesets carregados individualmente de `/assets/ChessWorldMap/sprites/`
+- Spritesheet do jogador carregado separadamente
 
-2. **Create** (`WorldScene.create`):
-   - `this.make.tilemap({ key: 'world' })` creates the tilemap
-   - `map.addTilesetImage(name, name)` for each of the 21 tilesets (name must match Tiled)
-   - Tile layers created via `map.createLayer(name, allTilesets)` - skips layers matching `skipLayers` patterns
-   - GID-based objects created via `map.createFromObjects()`
-   - Physics bounds = `map.widthInPixels × map.heightInPixels`
+**Create** (`WorldScene.create`, linha 100-155):
+- `this.make.tilemap({ key: 'world' })` cria o tilemap
+- `map.addTilesetImage(name, name)` para 21 tilesets (nome deve coincidir com o Tiled)
+- Tile layers criadas via `map.createLayer(name, allTilesets)` — pula layers no `skipLayers`
+- Objetos com GID renderizados via `map.createFromObjects()`
+- Physics bounds = `map.widthInPixels x map.heightInPixels`
 
-3. **Collisions** (`setupCollision`):
-   - Reads object layer named `'collision'` (case-insensitive)
-   - Creates invisible **rectangles** as static Arcade Physics bodies
-   - Adds `physics.add.collider(player, collisionGroup)`
-   - **ONLY rectangles are handled** - no polygon support
+**Colisoes** (`setupCollision`, linha 256-274):
+- Le object layer `'collision'` (case-insensitive)
+- Cria **apenas retangulos** como Static Arcade Bodies
+- `physics.add.collider(player, collisionGroup)`
+- **NAO suporta poligonos**
 
-4. **Spawn** (`findSpawnPoint`):
-   - Reads object layer named `'spawn'`
-   - Finds object named `player_spawn` or type `spawn`
-   - Fallback: center of map (`widthInPixels/2`, `heightInPixels/2`)
+**Spawn** (`findSpawnPoint`, linha 243-254):
+- Le object layer `'spawn'`
+- Busca objeto `player_spawn` ou type `spawn`
+- Fallback: centro do mapa
 
-5. **Camera**:
-   - Bounds = full map pixel dimensions
-   - Follows player with lerp 0.08
-   - Default zoom: 2 (board zoom: 3)
+**Camera** (linha 146-148):
+- Bounds = dimensoes em pixels do mapa
+- Segue jogador com lerp 0.08
+- Zoom padrao: 2, zoom de tabuleiro: 3
 
-6. **Interactives** (`setupInteractives`):
-   - Scans all object layers for type `chess_arena` or name containing "chess"
-   - Falls back to scanning layers named "chessboard"
-   - Creates interactive zones for click-to-play
+**Interativos** (`setupInteractives`, linha 276-338):
+- Escaneia objetos com type `chess_arena` ou nome contendo "chess"
+- Fallback: escaneia layers com nome "chessboard"
+- Cria zonas interativas para click-to-play
 
-### Old Map: `public/assets/ChessWorldMap/world.tmj`
+### Caminho do Mapa Antigo
 
-- **Dimensions:** 100×80 tiles, 16×16px tile size = 1600×1280 pixels
-- **Tilesets:** 21 (all embedded, no external sources)
-- **Object Layers:** `Collision` (rectangles), `Spawn` (1 point), `Interactives` (4 chess_arena)
-- **Tile Layers:** ~38 layers (no groups, flat structure)
-- **Chess boards:** 4 (via object layers ParkChessBoard1-4 + Interactives)
-- **Collision shapes:** ~40 rectangles only
-- **Reference image layer:** points to desktop path (non-functional)
+```
+public/assets/ChessWorldMap/world.tmj
+```
 
-### Multiplayer Position Sync
+Configurado em `src/game/config/mapConfig.ts`:
+```ts
+path: '/assets/ChessWorldMap/world.tmj'
+basePath: '/assets/ChessWorldMap/'
+tileSize: 16
+```
 
-- **Client → Server:** Every 50ms while moving, sends `move_to` with `{x, y, targetX, targetY, direction, isMoving}`
-- **Server (`WorldRoom`):** Updates `PlayerState` schema directly; Colyseus auto-syncs to all clients
-- **Default join position:** `x: 800, y: 640` (fallback in `onJoin`)
-- **Remote players:** Interpolated via `RemotePlayerInterpolator`
-- **No map/room ID** is sent with position — all players share one WorldRoom per region
+### Multiplayer - Sincronizacao
 
-### Chat & Voice Relationship with Scene
+- **Client -> Server:** A cada 50ms enquanto move, envia `move_to` com `{x, y, targetX, targetY, direction, isMoving}`
+- **Server (WorldRoom):** Atualiza `PlayerState` diretamente; Colyseus auto-sync para todos
+- **Posicao padrao join:** `x: 800, y: 640`
+- **Jogadores remotos:** Interpolados via `RemotePlayerInterpolator`
+- **Nenhum ID de mapa** e enviado junto com a posicao — todos compartilham o mesmo WorldRoom por regiao
 
-- **Text chat:** Handled entirely via Colyseus room messages (`'chat'` event). UI is a React overlay (`PublicChat.tsx`). No coupling to scene coordinates or map.
-- **Voice chat:** LiveKit room named `voice_world_{region}`. Colyseus notified via `voice_joined`/`voice_left`/`voice_muted_changed`. VoiceParticipantState tracked in WorldState schema. No coupling to map geometry.
+### Chat e Voz
 
-### Hardcoded References to Old Map
+- **Chat de texto:** Via mensagens Colyseus (`'chat'` event). UI e overlay React (`PublicChat.tsx`). **Zero acoplamento** com coordenadas ou mapa.
+- **Chat de voz:** LiveKit room nomeado `voice_world_{region}`. Colyseus notificado via `voice_joined`/`voice_left`. **Zero acoplamento** com geometria do mapa.
 
-| File | Reference | Value |
+### Referencias Fixas ao Mapa Antigo
+
+| Arquivo | Referencia | Valor |
 |---|---|---|
 | `src/config/game.ts` | `WORLD_WIDTH` / `WORLD_HEIGHT` | 1600 / 1280 |
-| `src/game/map/mapLayout.ts` | `MAP_WIDTH` / `MAP_HEIGHT` | 2000 / 1500 (legacy) |
-| `src/game/map/mapLayout.ts` | `SPAWN_X` / `SPAWN_Y` | 1000 / 750 (legacy) |
-| `src/game/map/mapLayout.ts` | `ARENAS[]` | 10 arenas with absolute px coords |
-| `src/game/map/mapLayout.ts` | `HOUSES[]` | 8 houses with absolute px coords |
+| `src/game/map/mapLayout.ts` | `MAP_WIDTH` / `MAP_HEIGHT` | 2000 / 1500 |
+| `src/game/map/mapLayout.ts` | `SPAWN_X` / `SPAWN_Y` | 1000 / 750 |
+| `src/game/map/mapLayout.ts` | `ARENAS[]` | 10 arenas com coords absolutas |
+| `src/game/map/mapLayout.ts` | `HOUSES[]` | 8 casas com coords absolutas |
 | `src/game/scenes/WorldScene.ts` | `getPlayerPosition()` fallback | 800, 640 |
-| `server/src/rooms/WorldRoom.ts` | default join position | 800, 640 |
-| `src/game/config/mapConfig.ts` | `path`, `basePath`, `tileSize` | `/assets/ChessWorldMap/world.tmj`, 16 |
+| `server/src/rooms/WorldRoom.ts` | posicao padrao onJoin | 800, 640 |
+| `src/game/config/mapConfig.ts` | path, basePath, tileSize | ChessWorldMap, 16 |
 
 ---
 
-## 2. New Map Files - Status
+## 2. Validacao dos Novos Mapas
 
-### CRITICAL FINDING: Files Not Present
+### main_world.tmj
 
-The following files referenced in the task do **not exist** on disk:
+| Propriedade | Valor |
+|---|---|
+| JSON valido | SIM |
+| Dimensoes | 80x300 tiles (2560x9600 px) |
+| Tile size | 32x32 |
+| Tilesets externos (source) | NENHUM |
+| Tilesets declarados | 55 (26 atlas + 29 single-tile) |
+| Imagens referenciadas | 55 (todas presentes no disco) |
+| Camadas totais | 146 (10 groups, 67 tile, 69 object) |
 
-- `public/assets/worldv2/newworld.tmj` (main world)
-- `public/assets/worldv2/main_village_template.tmj` (village template)
-- `public/assets/worldv2/sprites/tilesets/*` (tileset PNGs)
+**Propriedades do mapa:**
+- `mapId` = main_world
+- `mapType` = overworld
+- `defaultSpawn` = main_player_spawn
+- `tileSize` = 32
+- `villageId` = main_village
 
-The entire `public/assets/worldv2/` directory is absent. These files appear in the project manifest but have not been uploaded or created.
+**Camadas logicas confirmadas (grupo GAMEPLAY):**
+- [OK] world_zones
+- [OK] character_anchors
+- [OK] camera_anchors
+- [OK] ui_anchors
+- [OK] portal_interactions
+- [OK] village_interactions
+- [OK] house_interactions
+- [OK] spawns
+- [OK] building_interactions
+- [OK] collisions
+- [OK] chess_tables_interactions
 
-**Action required:** Upload/place the new TMJ files and their associated tileset images before proceeding with validation tasks 2-6.
+**Estruturas confirmadas:**
+- [OK] 14 chessboard layers (tabuleiros visuais)
+- [OK] 14 board interaction zones em `chess_tables_interactions`
+- [OK] 36 house layers
+- [OK] 28 player positions (2 por tabuleiro: top + bottom)
+- [OK] 28 spectator positions (2 left + 2 right por tabuleiro)
+- [OK] 140 character anchors (sit/exit positions)
+- [OK] 15 board overlays em ui_anchors
+- [OK] 12 camera_focus areas em ui_anchors + 2 em camera_anchors
+- [OK] 43 spawns (main + exit spawns)
+- [OK] 186 collisions (131 rect + 55 polygons)
+- [OK] main_player_spawn em (1273, 926)
+
+**Nomes duplicados (intencionais, em grupos diferentes):**
+- Grass, Park Roads, Fence, Energy Pole Base, Trees, traffic signs, Lamp Base, Tacts Academy Trees
+
+**Objetos fora dos limites (2 warnings):**
+- House13 tile object em x:-51 (praticamente na borda, toleravel)
+- world_zones objeto em x:3031 (fora da largura 2560 - precisa verificacao)
+
+**Custom properties nos objetos:** action, anchorType, boardFiles, boardRanks, buildingId, collisionType, direction, fitMode, focusMode, houseCapacity, houseId, instanceMode, interaction, interactionType, interactive, lockCenter, objectId, obstacleType, overlayId, padding, part, portalId, position, requiresInput, role, seatIndex, side, sourceMap, spawnId, spawnType, tableCount, tableId, targetMap, targetSpawn, triggerMode, updateMode, villageId, zoneId, zoneType
 
 ---
 
-## 3. Physics System - Polygon Collision Support
+### main_village_template.tmj
 
-### Current State
+| Propriedade | Valor |
+|---|---|
+| JSON valido | SIM |
+| Dimensoes | 80x180 tiles (2560x5760 px) |
+| Tile size | 32x32 |
+| Tilesets externos (source) | NENHUM |
+| Tilesets declarados | 56 |
+| Imagens referenciadas | 56 (55 encontradas, 1 faltando: Actor1.png) |
 
-The current `setupCollision` method in `WorldScene.ts` (line 256-274) **only supports rectangles**:
+**Propriedades do mapa:**
+- [OK] mapId = main_village_template
+- [OK] mapType = village_template
+- [OK] defaultSpawn = village_instance_entry
+- [OK] templateId = main_village_template
+- [OK] instanceMode = dynamic
+- [OK] houseCapacity = 36
+- [OK] tileSize = 32
+
+**Estruturas confirmadas:**
+- [OK] village_instance_entry_spawn presente
+- [OK] village_instance_exit_gateway presente
+- [OK] village_instance_zone presente
+- [OK] Nenhum villageId fixo nas casas
+- [OK] 36 house interaction entries
+- [OK] 36 house exit spawns
+- [OK] 4 collisoes de limite do mapa (map_boundary_left/right/top/bottom)
+- [OK] 42 collisoes totais (4 rect + 38 polygons)
+
+**Imagem faltando:** `Actor1.png` - provavelmente um spritesheet de character nao incluido nos assets (nao e bloqueante para a estrutura do mapa).
+
+---
+
+## 3. Suporte a Colisoes Poligonais
+
+### Situacao Atual
+
+O metodo `setupCollision` em `WorldScene.ts` (linha 256-274) **so suporta retangulos**:
 
 ```typescript
 collisionLayer.objects.forEach(obj => {
@@ -146,120 +224,115 @@ collisionLayer.objects.forEach(obj => {
 });
 ```
 
-### What Needs to Change
+### Novos Mapas
 
-The new map uses **polygon-based collisions** for irregular structures. Phaser 4 Arcade Physics does **not natively support polygon bodies**. Options:
+- **main_world:** 55 poligonos + 131 retangulos nas colisoes
+- **village_template:** 38 poligonos + 4 retangulos nas colisoes
+- **Total: 94 poligonos** que o sistema atual ignora completamente
 
-1. **Decompose polygons into convex parts** using a library like `poly-decomp` and create multiple Arcade bodies per polygon. Simple but imprecise for complex shapes.
+### Opcoes para Implementacao
 
-2. **Switch to Matter.js physics** (Phaser's alternative physics engine) which natively supports polygon bodies via `this.matter.add.fromVertices()`. This is the cleanest solution but requires:
-   - Changing `physics: { default: 'arcade' }` → `physics: { default: 'matter' }` in the Phaser config
-   - Rewriting player body creation
-   - Rewriting all collider setup
-   - Testing performance with many polygon bodies
+| Opcao | Complexidade | Performance | Precisao |
+|---|---|---|---|
+| **A. Matter.js** | ALTA (reescrever fisica) | Boa | Perfeita |
+| **B. poly-decomp + Arcade** | MEDIA | Boa | Muito boa |
+| **C. Raycasting manual** | MEDIA | Variavel | Boa |
 
-3. **Hybrid approach:** Keep Arcade for player movement but create invisible Matter bodies for polygon collisions and check overlaps manually. More complex but lower blast radius.
+**Recomendacao:** Opcao B - Decompor poligonos convexos e criar multiplos corpos Arcade por poligono. Evita reescrever todo o sistema de movimentacao (que ja funciona bem com Arcade) e mantem compatibilidade com o multiplayer existente.
 
-4. **Approximate with rectangles:** For simple polygons, compute bounding box. NOT recommended per requirements ("do not simplify polygons").
-
-### Recommendation
-
-**Option 2 (Matter.js)** is the cleanest path. Phaser 4's Matter integration handles Tiled polygon objects well. The migration effort is significant but contained to:
-- `PhaserGame.ts` (physics config)
-- `WorldScene.ts` (player body, collision setup, movement)
-- `playerConfig.ts` (body size/offset)
+**Mudancas necessarias:**
+1. Adicionar logica em `setupCollision` para detectar `obj.polygon`
+2. Para cada poligono, converter vertices relativos em absolutos
+3. Decompor em partes convexas (ou usar bounding boxes apenas para poligonos simples)
+4. Criar um body Arcade para cada parte convexa
+5. Alternativa: usar `Phaser.Geom.Polygon` com overlap checks manuais
 
 ---
 
-## 4. Files That Will Need Modification During Migration
+## 4. Arquivos que Precisarao Ser Modificados
 
-| File | Change Required |
+| Arquivo | Mudanca |
 |---|---|
-| `src/game/config/mapConfig.ts` | New path, basePath, tileSize (32), new skipLayers |
-| `src/game/scenes/WorldScene.ts` | New tileset list, polygon collisions, new interactive layer names, spawn logic |
-| `src/game/PhaserGame.ts` | Physics engine config (if switching to Matter) |
-| `src/game/config/playerConfig.ts` | Body size/offset for new tile size |
-| `src/config/game.ts` | `WORLD_WIDTH`/`WORLD_HEIGHT` constants |
-| `src/game/map/mapLayout.ts` | Remove or replace — legacy hardcoded positions |
-| `src/game/map/decorations.ts` | Remove or replace — procedural map no longer used |
-| `server/src/rooms/WorldRoom.ts` | Default spawn coordinates |
-| `src/components/game/BoardModal.tsx` | Arena ID format if changed |
-| `src/hooks/useRealtimeBoards.ts` | Board registration if IDs change |
+| `src/game/config/mapConfig.ts` | Novo path, basePath, tileSize (32), novos skipLayers |
+| `src/game/scenes/WorldScene.ts` | Nova lista de tilesets (55), logica de poligonos, novos nomes de layers interativas, spawns |
+| `src/game/PhaserGame.ts` | Possivelmente config de fisica (se Matter.js) |
+| `src/game/config/playerConfig.ts` | Body size/offset para novo tileSize |
+| `src/config/game.ts` | WORLD_WIDTH=2560, WORLD_HEIGHT=9600 |
+| `src/game/map/mapLayout.ts` | Remover ou substituir - coords legacy |
+| `src/game/map/decorations.ts` | Remover ou substituir |
+| `server/src/rooms/WorldRoom.ts` | Coords padrao de spawn (1273, 926) |
+| `src/components/game/BoardModal.tsx` | Novos IDs de arena (table_01..table_14) |
 
 ---
 
-## 5. Regression Risks
+## 5. Riscos de Regressao
 
-| Risk | Severity | Mitigation |
+| Risco | Severidade | Mitigacao |
 |---|---|---|
-| Physics engine swap breaks player movement | HIGH | Test extensively; keep old scene as fallback |
-| Tileset name mismatch breaks rendering | MEDIUM | Script validates names match TMJ exactly |
-| Spawn point mismatch causes players to spawn off-map | MEDIUM | Validate spawn exists and is within bounds |
-| Board/arena IDs change, break existing challenges | HIGH | Map old IDs to new or keep compatible names |
-| Different tile size (16→32) affects body offsets | MEDIUM | Adjust all body size/offset values |
-| Map pixel dimensions change affects server defaults | LOW | Update WorldRoom fallback coords |
-| Chat/voice unaffected (no coupling to map geometry) | NONE | - |
+| Troca de tile size (16->32) quebra body offsets | MEDIA | Ajustar body.setSize/setOffset |
+| Novos IDs de tabuleiro quebram challenges existentes | ALTA | Mapear IDs antigos para novos |
+| Mapa 6x maior (1600x1280 -> 2560x9600) afeta performance | MEDIA | Testar com camera culling |
+| 55 tilesets vs 21 aumenta tempo de load | BAIXA | Phaser faz lazy rendering |
+| Poligonos ignorados = jogador atravessa paredes | ALTA | Implementar antes de migrar |
+| world_zones objeto fora dos limites (x:3031) | BAIXA | Verificar com designer |
+| House13 em x:-51 (ligeiramente fora) | BAIXA | Toleravel |
+| Actor1.png ausente no village_template | BAIXA | Nao bloqueia (tileset de character) |
 
 ---
 
-## 6. Recommended Implementation Order
+## 6. Ordem Recomendada de Implementacao
 
-1. **Upload new map files** and tileset PNGs to `public/assets/worldv2/`
-2. **Run validation script** (`npm run validate:world-maps`) — fix any image/structure issues
-3. **Create a new MapConfig** for v2 (separate from old config, don't replace yet)
-4. **Create a parallel scene** (`WorldSceneV2`) that loads the new map
-5. **Implement polygon collision support** (Matter.js or poly-decomp)
-6. **Wire up interactives** (chess tables, houses, portals) from new object layers
-7. **Add scene switching** capability (feature flag or config)
-8. **Test multiplayer** with new coordinates and spawn points
-9. **Update server defaults** once new map is confirmed working
-10. **Remove old map** only after new version is stable in production
-
----
-
-## 7. Strategy to Preserve Chat, Voice & Multiplayer
-
-- **Chat:** No changes needed. Chat is message-based via Colyseus room, completely decoupled from map geometry.
-- **Voice:** No changes needed. LiveKit room is named by region, not by map.
-- **Multiplayer position sync:** Works with any coordinates. The `move_to` message sends absolute x/y. As long as all players load the same map, positions will be consistent.
-- **Board registration:** The `register_boards` message already dynamically registers arena metadata from the Tiled map. No hardcoded server-side board positions.
-- **Migration path:** Both scenes can coexist. Route all clients to either old or new scene. Once new scene is validated, deprecate old.
+1. **Implementar suporte a poligonos** no setupCollision (sem alterar mapa carregado)
+2. **Criar MapConfigV2** paralelo ao config atual
+3. **Criar WorldSceneV2** (ou adaptar WorldScene com feature flag)
+4. **Carregar novo mapa** com 55 tilesets no preload
+5. **Configurar layers** (skip patterns, createLayer, createFromObjects)
+6. **Conectar interativos** (chess_tables_interactions com propriedades tableId)
+7. **Conectar spawns** (main_player_spawn, exit spawns)
+8. **Ajustar camera** (novo tamanho de mapa, camera_anchors)
+9. **Testar multiplayer** com novas coordenadas
+10. **Feature flag** para alternar entre mapas durante testes
+11. **Remover mapa antigo** somente apos nova versao estavel
 
 ---
 
-## 8. Strategy to Remove Old Map
+## 7. Estrategia para Preservar Chat, Voz e Multiplayer
 
-1. Keep old map **fully functional** during development of new scene
-2. Add a config switch (`MAP_VERSION: 'v1' | 'v2'`) to select which scene loads
-3. Deploy v2 as opt-in (feature flag or URL param) for testing
-4. Once v2 is confirmed stable with all features working:
-   - Remove `public/assets/ChessWorldMap/` directory
-   - Remove legacy files: `mapLayout.ts`, `decorations.ts`
-   - Update `mapConfig.ts` to point exclusively to new paths
-   - Clean up any `v1`/`v2` branching code
+- **Chat:** Nenhuma mudanca necessaria. Chat e message-based via Colyseus, desacoplado da geometria.
+- **Voz:** Nenhuma mudanca necessaria. LiveKit room e nomeado por regiao, nao por mapa.
+- **Multiplayer posicional:** Funciona com qualquer coordenada. O `move_to` envia x/y absolutos. Desde que todos carreguem o mesmo mapa, posicoes serao consistentes.
+- **Registro de boards:** O `register_boards` ja registra dinamicamente a partir do Tiled. Basta enviar os novos dados ao conectar.
 
 ---
 
-## 9. Validation Script Results
+## 8. Estrategia para Remover o Mapa Antigo
+
+1. Manter mapa antigo **100% funcional** durante desenvolvimento
+2. Adicionar config switch (`MAP_VERSION: 'v1' | 'v2'`) em `mapConfig.ts`
+3. Testar v2 com feature flag (env var ou URL param)
+4. Apos v2 confirmado estavel:
+   - Remover `public/assets/ChessWorldMap/` inteiro
+   - Remover `src/game/map/mapLayout.ts` e `decorations.ts`
+   - Atualizar `mapConfig.ts` para apontar exclusivamente para world-v2
+   - Limpar qualquer branching v1/v2
+
+---
+
+## 9. Resultado da Validacao
 
 ```
 npm run validate:world-maps
 
-STATUS: FAILED
-ERRORS: 2
-  - [main_world] File not found: public/assets/worldv2/newworld.tmj
-  - [village_template] File not found: public/assets/worldv2/main_village_template.tmj
+STATUS: PASSED WITH WARNINGS
+Errors: 0 | Warnings: 6 | Polygons: 94
+
+Warnings:
+- [main_world] House13 tile object em x:-51 (borda)
+- [main_world] world_zones objeto em x:3031 (fora do mapa)
+- [main_world] 2 objetos fora dos limites
+- [village_template] Actor1.png ausente
+- [village_template] House13 em x:-51 (borda)
+- [village_template] 1 objeto fora dos limites
 ```
 
-**Reason:** The new map TMJ files and their associated tileset images have not been placed on disk yet. The validation script is ready and will perform full structural validation once the files are uploaded.
-
----
-
-## 10. Next Steps Required
-
-1. **Upload the new TMJ files** to `public/assets/worldv2/`:
-   - `newworld.tmj` (main world map)
-   - `main_village_template.tmj` (village template)
-2. **Upload all tileset PNGs** to `public/assets/worldv2/sprites/tilesets/`
-3. **Re-run** `npm run validate:world-maps` to get full structural validation
-4. Once validation passes, proceed with implementation per the order above
+Nenhum erro bloqueante. Mapas prontos para migracao.
