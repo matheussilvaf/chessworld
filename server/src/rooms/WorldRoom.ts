@@ -62,8 +62,8 @@ export class WorldRoom extends Room<WorldState> {
     });
 
     this.onMessage('create_challenge', (client, data) => {
-      const { boardId, timeCategory, baseMinutes, incrementSeconds, timeLabel } = data as {
-        boardId: string; timeCategory: string; baseMinutes: number; incrementSeconds: number; timeLabel: string;
+      const { boardId, timeCategory, baseMinutes, incrementSeconds, timeLabel, side } = data as {
+        boardId: string; timeCategory: string; baseMinutes: number; incrementSeconds: number; timeLabel: string; side?: 'w' | 'b' | 'random';
       };
       const player = this.state.players.get(client.sessionId);
       if (!player) return;
@@ -74,6 +74,16 @@ export class WorldRoom extends Room<WorldState> {
         return;
       }
 
+      // Determine which color the challenger wants
+      let challengerColor: 'w' | 'b';
+      if (side === 'b') {
+        challengerColor = 'b';
+      } else if (side === 'w') {
+        challengerColor = 'w';
+      } else {
+        challengerColor = Math.random() < 0.5 ? 'w' : 'b';
+      }
+
       board.status = 'waiting';
       board.waitingPlayerId = player.id;
       board.waitingPlayerName = player.username;
@@ -81,7 +91,15 @@ export class WorldRoom extends Room<WorldState> {
       board.baseMinutes = baseMinutes;
       board.incrementSeconds = incrementSeconds;
       board.timeLabel = timeLabel;
+      board.whitePlayerId = challengerColor === 'w' ? player.id : '';
+      board.blackPlayerId = challengerColor === 'b' ? player.id : '';
       player.currentBoardId = boardId;
+
+      client.send('challenge_created', {
+        boardId,
+        color: challengerColor,
+        seat: challengerColor === 'w' ? 'bottom' : 'top',
+      });
     });
 
     this.onMessage('accept_challenge', (client, data) => {
@@ -113,6 +131,52 @@ export class WorldRoom extends Room<WorldState> {
 
       this.resetBoard(board);
       player.currentBoardId = '';
+
+      client.send('challenge_cancelled', { boardId });
+    });
+
+    this.onMessage('sit_spectator', (client, data) => {
+      const { boardId, seatKey } = data as { boardId: string; seatKey: string };
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+
+      const board = this.state.boards.get(boardId);
+      if (!board) return;
+
+      // Check if seat is already taken
+      const spectators = this.getSpectators(boardId);
+      if (spectators.has(seatKey)) {
+        client.send('error', { message: 'Spectator seat is taken' });
+        return;
+      }
+
+      // Max 4 physical spectator seats
+      if (spectators.size >= 4) {
+        client.send('error', { message: 'All spectator seats are full' });
+        return;
+      }
+
+      player.currentBoardId = boardId;
+      client.send('spectator_seated', { boardId, seatKey });
+    });
+
+    this.onMessage('leave_seat', (client, data) => {
+      const { boardId } = data as { boardId: string };
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+
+      // If player is a match participant, they can't just leave
+      const board = this.state.boards.get(boardId);
+      if (board && board.status === 'playing') {
+        const match = this.state.matches.get(board.matchId);
+        if (match && (match.whitePlayerId === player.id || match.blackPlayerId === player.id)) {
+          client.send('error', { message: 'Cannot leave during an active match. Resign first.' });
+          return;
+        }
+      }
+
+      player.currentBoardId = '';
+      client.send('seat_left', { boardId });
     });
 
     this.onMessage('chess_move', (client, data) => {
@@ -177,6 +241,48 @@ export class WorldRoom extends Room<WorldState> {
       match.winnerId = isWhite ? match.blackPlayerId : match.whitePlayerId;
       activeGames.delete(matchId);
 
+      this.broadcastMatchEnd(match);
+      this.cleanupMatchBoard(match);
+    });
+
+    this.onMessage('chess_draw_offer', (client, data) => {
+      const { matchId } = data as { matchId: string };
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+
+      const match = this.state.matches.get(matchId);
+      if (!match || match.status !== 'playing') return;
+
+      const isWhite = match.whitePlayerId === player.id;
+      const isBlack = match.blackPlayerId === player.id;
+      if (!isWhite && !isBlack) return;
+
+      const opponentId = isWhite ? match.blackPlayerId : match.whitePlayerId;
+      const opponentSession = this.findSessionByPlayerId(opponentId);
+      if (opponentSession) {
+        const opponentClient = this.clients.find(c => c.sessionId === opponentSession);
+        opponentClient?.send('draw_offered', { matchId, offeredBy: player.username });
+      }
+    });
+
+    this.onMessage('chess_draw_accept', (client, data) => {
+      const { matchId } = data as { matchId: string };
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+
+      const match = this.state.matches.get(matchId);
+      if (!match || match.status !== 'playing') return;
+
+      const isWhite = match.whitePlayerId === player.id;
+      const isBlack = match.blackPlayerId === player.id;
+      if (!isWhite && !isBlack) return;
+
+      match.status = 'finished';
+      match.result = 'draw';
+      match.winnerId = '';
+      activeGames.delete(matchId);
+
+      this.broadcastMatchEnd(match);
       this.cleanupMatchBoard(match);
     });
 
@@ -252,6 +358,16 @@ export class WorldRoom extends Room<WorldState> {
 
     this.state.players.set(client.sessionId, player);
     console.log(`[WorldRoom] Player joined: ${player.username} (${client.sessionId}) | total: ${this.state.players.size}`);
+
+    // If this player had an active match (reconnection), send match info
+    this.state.matches.forEach((match, matchId) => {
+      if (match.status !== 'playing') return;
+      if (match.whitePlayerId === playerId) {
+        client.send('match_started', { matchId, boardId: match.boardId, color: 'w' });
+      } else if (match.blackPlayerId === playerId) {
+        client.send('match_started', { matchId, boardId: match.boardId, color: 'b' });
+      }
+    });
   }
 
   async onLeave(client: Client, consented: boolean) {
@@ -274,6 +390,7 @@ export class WorldRoom extends Room<WorldState> {
             match.result = 'abandon';
             match.winnerId = isWhite ? match.blackPlayerId : match.whitePlayerId;
             activeGames.delete(matchId);
+            this.broadcastMatchEnd(match);
             this.cleanupMatchBoard(match);
           }
         }
@@ -302,6 +419,7 @@ export class WorldRoom extends Room<WorldState> {
           match.result = 'timeout';
           match.winnerId = match.blackPlayerId;
           activeGames.delete(matchId);
+          this.broadcastMatchEnd(match);
           this.cleanupMatchBoard(match);
         }
       } else {
@@ -311,6 +429,7 @@ export class WorldRoom extends Room<WorldState> {
           match.result = 'timeout';
           match.winnerId = match.whitePlayerId;
           activeGames.delete(matchId);
+          this.broadcastMatchEnd(match);
           this.cleanupMatchBoard(match);
         }
       }
@@ -335,6 +454,22 @@ export class WorldRoom extends Room<WorldState> {
     if (board) {
       this.resetBoard(board);
     }
+
+    // Clear currentBoardId for participants
+    this.state.players.forEach((p) => {
+      if (p.currentBoardId === match.boardId) {
+        p.currentBoardId = '';
+      }
+    });
+  }
+
+  private broadcastMatchEnd(match: MatchState) {
+    this.broadcast('match_finished', {
+      matchId: match.id,
+      boardId: match.boardId,
+      result: match.result,
+      winnerId: match.winnerId,
+    });
   }
 
   private startMatch(board: BoardState, joiningPlayer: PlayerState, joiningClient: Client) {
@@ -344,21 +479,38 @@ export class WorldRoom extends Room<WorldState> {
     const baseTimeMs = board.baseMinutes * 60 * 1000;
     const incrementMs = board.incrementSeconds * 1000;
 
-    const whiteSessionId = this.findSessionByPlayerId(board.waitingPlayerId);
-    let whitePlayerName = 'Player';
-    if (whiteSessionId) {
-      const whitePlayer = this.state.players.get(whiteSessionId);
-      if (whitePlayer) whitePlayerName = whitePlayer.username;
+    // Determine colors based on what the challenger chose
+    let whiteId: string;
+    let blackId: string;
+    let whitePlayerName: string;
+    let blackPlayerName: string;
+
+    if (board.whitePlayerId === board.waitingPlayerId) {
+      // Challenger chose white
+      whiteId = board.waitingPlayerId;
+      blackId = joiningPlayer.id;
+      const whiteSession = this.findSessionByPlayerId(whiteId);
+      const whitePlayer = whiteSession ? this.state.players.get(whiteSession) : null;
+      whitePlayerName = whitePlayer?.username || 'Player';
+      blackPlayerName = joiningPlayer.username;
+    } else {
+      // Challenger chose black
+      blackId = board.waitingPlayerId;
+      whiteId = joiningPlayer.id;
+      const blackSession = this.findSessionByPlayerId(blackId);
+      const blackPlayer = blackSession ? this.state.players.get(blackSession) : null;
+      blackPlayerName = blackPlayer?.username || 'Player';
+      whitePlayerName = joiningPlayer.username;
     }
 
     const match = new MatchState();
     match.id = matchId;
     match.boardId = board.id;
     match.region = joiningPlayer.region;
-    match.whitePlayerId = board.waitingPlayerId;
-    match.blackPlayerId = joiningPlayer.id;
+    match.whitePlayerId = whiteId;
+    match.blackPlayerId = blackId;
     match.whitePlayerName = whitePlayerName;
-    match.blackPlayerName = joiningPlayer.username;
+    match.blackPlayerName = blackPlayerName;
     match.fen = chess.fen();
     match.pgn = '';
     match.status = 'playing';
@@ -374,21 +526,22 @@ export class WorldRoom extends Room<WorldState> {
     this.state.matches.set(matchId, match);
 
     board.status = 'playing';
-    board.whitePlayerId = board.waitingPlayerId;
-    board.blackPlayerId = joiningPlayer.id;
+    board.whitePlayerId = whiteId;
+    board.blackPlayerId = blackId;
     board.matchId = matchId;
     board.waitingPlayerId = '';
     board.waitingPlayerName = '';
 
     joiningPlayer.currentBoardId = board.id;
 
+    const whiteSessionId = this.findSessionByPlayerId(whiteId);
     if (whiteSessionId) {
       const whiteClient = this.clients.find(c => c.sessionId === whiteSessionId);
       whiteClient?.send('match_started', { matchId, boardId: board.id, color: 'w' });
     }
     joiningClient.send('match_started', { matchId, boardId: board.id, color: 'b' });
 
-    console.log(`[WorldRoom] Match started: ${matchId} (${whitePlayerName} vs ${joiningPlayer.username}) on ${board.name}`);
+    console.log(`[WorldRoom] Match started: ${matchId} (${whitePlayerName} vs ${blackPlayerName}) on ${board.name}`);
   }
 
   private endMatch(matchId: string, game: Chess) {
@@ -411,7 +564,25 @@ export class WorldRoom extends Room<WorldState> {
       match.result = 'draw';
     }
 
+    this.broadcastMatchEnd(match);
     this.cleanupMatchBoard(match);
+  }
+
+  private getSpectators(boardId: string): Set<string> {
+    const spectatorSeats = new Set<string>();
+    this.state.players.forEach((p) => {
+      if (p.currentBoardId === boardId) {
+        // Players sitting at the board who are NOT the match participants
+        const board = this.state.boards.get(boardId);
+        if (board && board.matchId) {
+          const match = this.state.matches.get(board.matchId);
+          if (match && match.whitePlayerId !== p.id && match.blackPlayerId !== p.id) {
+            spectatorSeats.add(p.id);
+          }
+        }
+      }
+    });
+    return spectatorSeats;
   }
 
   private findSessionByPlayerId(playerId: string): string | undefined {

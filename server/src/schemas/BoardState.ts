@@ -8,7 +8,7 @@ export class BoardState extends Schema {
   y!: number;
   width!: number;
   height!: number;
-  status!: string;
+  status!: string; // 'idle' | 'waiting' | 'playing'
   waitingPlayerId!: string;
   waitingPlayerName!: string;
   timeCategory!: string;
@@ -18,27 +18,6 @@ export class BoardState extends Schema {
   whitePlayerId!: string;
   blackPlayerId!: string;
   matchId!: string;
-
-  constructor() {
-    super();
-    this.id = '';
-    this.name = '';
-    this.region = '';
-    this.x = 0;
-    this.y = 0;
-    this.width = 80;
-    this.height = 80;
-    this.status = 'idle';
-    this.waitingPlayerId = '';
-    this.waitingPlayerName = '';
-    this.timeCategory = '';
-    this.baseMinutes = 0;
-    this.incrementSeconds = 0;
-    this.timeLabel = '';
-    this.whitePlayerId = '';
-    this.blackPlayerId = '';
-    this.matchId = '';
-  }
 }
 
 defineTypes(BoardState, {

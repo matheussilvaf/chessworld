@@ -96,6 +96,7 @@ export function sendCreateChallenge(data: {
   baseMinutes: number;
   incrementSeconds: number;
   timeLabel: string;
+  side?: 'w' | 'b' | 'random';
 }) {
   worldRoom?.send('create_challenge', data);
 }
@@ -126,6 +127,14 @@ export function sendDrawAccept(matchId: string) {
 
 export function sendChat(message: string) {
   worldRoom?.send('chat', { message });
+}
+
+export function sendSitSpectator(boardId: string, seatKey: string) {
+  worldRoom?.send('sit_spectator', { boardId, seatKey });
+}
+
+export function sendLeaveSeat(boardId: string) {
+  worldRoom?.send('leave_seat', { boardId });
 }
 
 export function registerBoards(boards: { id: string; name: string; x: number; y: number; width?: number; height?: number }[]) {

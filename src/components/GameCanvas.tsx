@@ -80,9 +80,53 @@ export function GameCanvas() {
 
       // Wire interaction system events to store
       scene.onInteractionClick = (event) => {
-        const store = useInteractionStore.getState();
-        if (store.debugEnabled) {
-          store.openModal({ object: event.object, playerDistance: event.playerDistance });
+        const interactionStore = useInteractionStore.getState();
+        const obj = event.object;
+
+        // Chess table interactions trigger BoardModal
+        if (obj.category === 'chess_table' || obj.category === 'player_seat') {
+          if (!user || !profile || !region) return;
+          const tableId = obj.properties.tableId as string;
+          if (!tableId) return;
+          const state = useGameStore.getState();
+          if (state.selectedBoard || state.boardLocked) return;
+          setSelectedBoard({
+            id: tableId,
+            name: tableId,
+            region,
+            x: obj.x,
+            y: obj.y,
+            status: 'free',
+            waiting_user_id: null,
+            current_match_id: null,
+            time_minutes: null,
+            increment_seconds: null,
+            created_at: '',
+            updated_at: '',
+          } as any);
+          return;
+        }
+
+        // Spectator seat interactions
+        if (obj.category === 'spectator_seat') {
+          const tableId = obj.properties.tableId as string;
+          if (!tableId) return;
+          const state = useGameStore.getState();
+          const boardState = state.colyseusBoards.find(b => b.id === tableId);
+          if (boardState?.status === 'playing' && boardState.matchId) {
+            // Auto-spectate
+            useChessStore.getState().openSpectate(boardState.matchId);
+            // Seat as spectator
+            const position = obj.properties.position as string;
+            const seatKey = position?.includes('left') ? 'left_01' : 'right_01';
+            scene.seatPlayer(tableId, 'spectator', seatKey);
+          }
+          return;
+        }
+
+        // For all other interaction categories, show debug modal if enabled
+        if (interactionStore.debugEnabled) {
+          interactionStore.openModal({ object: obj, playerDistance: event.playerDistance });
         }
       };
       scene.onProximityEnter = (event) => {
@@ -279,10 +323,42 @@ export function GameCanvas() {
     room.onMessage('match_started', (data: any) => {
       useGameStore.getState().setMatchStartedInfo(data);
       useGameStore.getState().setLastEvent(`match_started ${data.matchId.slice(0, 8)}`);
+      // Seat the player at the correct anchor
+      if (gameRef.current) {
+        const worldScene = getWorldScene(gameRef.current);
+        if (worldScene && data.boardId) {
+          const seat = data.color === 'w' ? 'bottom' : 'top';
+          worldScene.seatPlayer(data.boardId, 'player', seat);
+        }
+      }
     });
 
     room.onMessage('match_finished', (data: any) => {
-      useGameStore.getState().setLastEvent(`match_finished: ${data.reason}`);
+      useGameStore.getState().setLastEvent(`match_finished: ${data.result}`);
+      // Unseat after short delay so player can see result
+      setTimeout(() => {
+        if (gameRef.current) {
+          const worldScene = getWorldScene(gameRef.current);
+          if (worldScene) worldScene.unseatPlayer();
+        }
+      }, 3000);
+    });
+
+    room.onMessage('challenge_created', (data: any) => {
+      // Seat challenger at their chosen side
+      if (gameRef.current && data.boardId) {
+        const worldScene = getWorldScene(gameRef.current);
+        if (worldScene) {
+          worldScene.seatPlayer(data.boardId, 'player', data.seat || 'bottom');
+        }
+      }
+    });
+
+    room.onMessage('challenge_cancelled', () => {
+      if (gameRef.current) {
+        const worldScene = getWorldScene(gameRef.current);
+        if (worldScene) worldScene.unseatPlayer();
+      }
     });
 
     room.onMessage('error', (data: any) => {

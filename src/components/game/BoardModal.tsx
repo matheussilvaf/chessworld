@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useChessStore } from '../../stores/chessStore';
-import { sendCreateChallenge, sendAcceptChallenge, sendBoardCancel } from '../../game/network/colyseusClient';
-import { X, Loader2, Swords, Zap, Timer, Clock, Eye } from 'lucide-react';
+import { sendCreateChallenge, sendAcceptChallenge, sendBoardCancel, getWorldRoom } from '../../game/network/colyseusClient';
+import { X, Loader2, Swords, Zap, Timer, Clock, Eye, Crown } from 'lucide-react';
 
 interface TimeControl {
   label: string;
@@ -47,7 +47,24 @@ export function BoardModal() {
   const { user } = useAuthStore();
   const { openMatch, openSpectate, matchId: activeMatchId, boardId: activeBoardId, reopenBoard } = useChessStore();
   const [selectedTime, setSelectedTime] = useState<TimeControl>({ label: '10 min', time: 10, increment: 0, category: 'rapid' });
+  const [selectedSide, setSelectedSide] = useState<'w' | 'b' | 'random'>('random');
   const [isWaiting, setIsWaiting] = useState(false);
+  const [challengerColor, setChallengerColor] = useState<'w' | 'b' | null>(null);
+
+  // Listen for challenge_created from server to know which color was assigned
+  useEffect(() => {
+    const room = getWorldRoom();
+    if (!room) return;
+
+    const handleChallengeCreated = (data: { boardId: string; color: 'w' | 'b'; seat: string }) => {
+      setChallengerColor(data.color);
+    };
+
+    room.onMessage('challenge_created', handleChallengeCreated);
+    return () => {
+      room.removeAllListeners?.();
+    };
+  }, []);
 
   // Match started: auto-open chess board
   if (matchStartedInfo) {
@@ -108,6 +125,7 @@ export function BoardModal() {
       baseMinutes: selectedTime.time,
       incrementSeconds: selectedTime.increment,
       timeLabel: selectedTime.label,
+      side: selectedSide,
     });
     setIsWaiting(true);
   };
@@ -123,6 +141,7 @@ export function BoardModal() {
     setIsWaiting(false);
     setBoardLocked(false);
     setSelectedBoard(null);
+    setChallengerColor(null);
   };
 
   const handleClose = () => {
@@ -148,10 +167,15 @@ export function BoardModal() {
             <div className="w-16 h-16 mx-auto rounded-full bg-amber-500/20 border-2 border-amber-500/50 flex items-center justify-center mb-4">
               <Loader2 className="w-7 h-7 text-amber-400 animate-spin" />
             </div>
-            <h3 className="text-white font-bold text-lg mb-1">Waiting for opponent...</h3>
+            <h3 className="text-white font-bold text-lg mb-1">Waiting for duel...</h3>
             <p className="text-slate-400 text-sm mb-1">
-              {selectedTime.label} | {selectedBoard.name}
+              {selectedTime.label} | {selectedBoard.name?.replace(/_/g, ' ')}
             </p>
+            {challengerColor && (
+              <p className="text-slate-500 text-xs mb-1">
+                Playing as: <span className="text-amber-300">{challengerColor === 'w' ? 'White' : 'Black'}</span>
+              </p>
+            )}
             <p className="text-slate-500 text-xs mb-6">
               Another player needs to join this board to start a match.
             </p>
@@ -201,7 +225,7 @@ export function BoardModal() {
     );
   }
 
-  // Another player is waiting
+  // Another player is waiting - offer to accept
   if (isWaitingOnServer && !waitingPlayerIsMe) {
     const categoryLabel = (boardState?.timeCategory || 'rapid').charAt(0).toUpperCase() + (boardState?.timeCategory || 'rapid').slice(1);
 
@@ -214,7 +238,7 @@ export function BoardModal() {
                 <Swords className="w-5 h-5 text-amber-400" />
               </div>
               <div>
-                <h3 className="text-white font-bold text-base">{selectedBoard.name}</h3>
+                <h3 className="text-white font-bold text-base">{selectedBoard.name?.replace(/_/g, ' ')}</h3>
                 <p className="text-amber-400 text-xs">Challenge available!</p>
               </div>
             </div>
@@ -259,21 +283,22 @@ export function BoardModal() {
     );
   }
 
-  // Default: Time control selection
+  // Default: Time control + side selection
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
       <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-sm overflow-hidden shadow-2xl">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
           <div>
-            <h3 className="text-white font-bold text-base">{selectedBoard.name}</h3>
-            <p className="text-slate-400 text-xs mt-0.5">Choose your time control</p>
+            <h3 className="text-white font-bold text-base">{selectedBoard.name?.replace(/_/g, ' ')}</h3>
+            <p className="text-slate-400 text-xs mt-0.5">Choose time control and side</p>
           </div>
           <button onClick={handleClose} className="text-slate-400 hover:text-white transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
+          {/* Time controls */}
           {TIME_CONTROLS.map((category) => (
             <div key={category.category}>
               <div className="flex items-center gap-2 mb-2">
@@ -300,6 +325,41 @@ export function BoardModal() {
               </div>
             </div>
           ))}
+
+          {/* Side selection */}
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Crown className="w-4 h-4 text-blue-400" />
+              <span className="text-white font-semibold text-sm">Side</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {([
+                { id: 'w' as const, label: 'White', img: '/assets/chesspieces/whiteking.png' },
+                { id: 'random' as const, label: 'Random', img: null },
+                { id: 'b' as const, label: 'Black', img: '/assets/chesspieces/blackking.png' },
+              ]).map((option) => {
+                const isActive = selectedSide === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    onClick={() => setSelectedSide(option.id)}
+                    className={`py-2.5 px-3 rounded-lg text-sm font-medium transition-all flex flex-col items-center gap-1 ${
+                      isActive
+                        ? 'bg-blue-500/20 text-blue-400 border-2 border-blue-500/60'
+                        : 'bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 hover:text-white'
+                    }`}
+                  >
+                    {option.img ? (
+                      <img src={option.img} alt={option.label} className="w-6 h-6" />
+                    ) : (
+                      <div className="w-6 h-6 flex items-center justify-center text-lg">?</div>
+                    )}
+                    <span className="text-xs">{option.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           <button
             onClick={handleCreateChallenge}

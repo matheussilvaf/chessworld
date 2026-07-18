@@ -13,6 +13,8 @@ import { RemotePlayerInterpolator } from '../network/interpolation';
 import AStarGrid from '../pathfinding/AStarGrid';
 import { InteractionSystem } from '../interactions/InteractionSystem';
 import type { InteractionEvent, InteractionObject, ZoneChangeEvent } from '../interactions/InteractionSystem';
+import { loadTableAnchors, getSeatAnchor, getExitAnchor } from '../config/tableAnchors';
+import type { TableAnchors, SeatAnchor } from '../config/tableAnchors';
 
 interface ChessArenaZone {
   id: string;
@@ -105,6 +107,8 @@ export class WorldScene extends Phaser.Scene {
   public onZoneChange?: (event: ZoneChangeEvent) => void;
 
   private interactionSystem!: InteractionSystem;
+  private tableAnchorsMap: Map<string, TableAnchors> = new Map();
+  private currentSeatInfo: { tableId: string; role: 'player' | 'spectator'; seat: string } | null = null;
 
   constructor() {
     super({ key: 'WorldScene' });
@@ -191,6 +195,7 @@ export class WorldScene extends Phaser.Scene {
 
     // Setup chess table interactives
     this.setupInteractives(map);
+    this.loadTableAnchorsFromTMJ();
 
     // Create player at spawn point
     const spawnPoint = this.findSpawnPoint(map);
@@ -1273,5 +1278,110 @@ export class WorldScene extends Phaser.Scene {
 
   public getInteractionStats() {
     return this.interactionSystem?.getStats() || {};
+  }
+
+  public loadTableAnchorsFromTMJ() {
+    const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
+    if (tmjData) {
+      this.tableAnchorsMap = loadTableAnchors(tmjData);
+    }
+  }
+
+  public seatPlayer(tableId: string, role: 'player' | 'spectator', seat: string) {
+    const anchors = this.tableAnchorsMap.get(tableId);
+    if (!anchors || !this.player) return;
+
+    const anchor = getSeatAnchor(anchors, role, seat);
+    if (!anchor || anchor.x === 0) return;
+
+    this.currentSeatInfo = { tableId, role, seat };
+    this.movementLocked = true;
+    this.target = null;
+    this.pathWaypoints = [];
+    this.currentWaypointIndex = 0;
+    this.finalDestination = null;
+    this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
+
+    this.tweens.add({
+      targets: this.playerBody.position,
+      x: anchor.x,
+      y: anchor.y,
+      duration: 600,
+      ease: 'Power2',
+      onUpdate: () => {
+        this.player.x = Math.round(this.playerBody.position.x - this.playerFeetOffsetX);
+        this.player.y = Math.round(this.playerBody.position.y - this.playerFeetOffset);
+      },
+      onComplete: () => {
+        this.currentDirection = anchor.direction as any;
+        this.player.anims.stop();
+        this.player.setFrame(getIdleFrame(this.currentDirection));
+      },
+    });
+
+    // Focus camera on table
+    const cam = anchors.cameraFocus;
+    if (cam) {
+      this.cameraFollowing = false;
+      this.cameraTargetX = cam.x + cam.width / 2;
+      this.cameraTargetY = cam.y + cam.height / 2;
+      this.targetZoom = this.boardZoom;
+    } else {
+      // Fallback: zoom to board center using first arena matching this tableId
+      const arena = this.arenas.find(a => a.id === tableId);
+      if (arena) {
+        this.cameraFollowing = false;
+        this.cameraTargetX = arena.x + arena.width / 2;
+        this.cameraTargetY = arena.y + arena.height / 2;
+        this.targetZoom = this.boardZoom;
+      }
+    }
+  }
+
+  public unseatPlayer() {
+    if (!this.currentSeatInfo) {
+      this.unlockMovement();
+      return;
+    }
+
+    const { tableId, role, seat } = this.currentSeatInfo;
+    const anchors = this.tableAnchorsMap.get(tableId);
+    this.currentSeatInfo = null;
+
+    if (anchors) {
+      const exit = getExitAnchor(anchors, role, seat);
+      if (exit && exit.x !== 0) {
+        this.tweens.add({
+          targets: this.playerBody.position,
+          x: exit.x,
+          y: exit.y,
+          duration: 400,
+          ease: 'Power2',
+          onUpdate: () => {
+            this.player.x = Math.round(this.playerBody.position.x - this.playerFeetOffsetX);
+            this.player.y = Math.round(this.playerBody.position.y - this.playerFeetOffset);
+          },
+          onComplete: () => {
+            this.currentDirection = exit.direction as any;
+            this.player.anims.stop();
+            this.player.setFrame(getIdleFrame(this.currentDirection));
+            this.unlockMovement();
+          },
+        });
+        this.targetZoom = this.defaultZoom;
+        this.cameraFollowing = true;
+        return;
+      }
+    }
+
+    this.unlockMovement();
+  }
+
+  public getTableAnchors(tableId: string): TableAnchors | undefined {
+    return this.tableAnchorsMap.get(tableId);
+  }
+
+  public isSeated(): boolean {
+    return this.currentSeatInfo !== null;
   }
 }
