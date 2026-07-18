@@ -113,6 +113,7 @@ export class WorldScene extends Phaser.Scene {
   private interactionSystem!: InteractionSystem;
   private tableRegistry: TableRegistry | null = null;
   private currentSeatInfo: { tableId: string; role: 'player' | 'spectator'; seat: string } | null = null;
+  private seatTween: Phaser.Tweens.Tween | null = null;
   private savedCollisionFilter: any = null;
   private chessOverlay!: ChessOverlayManager;
 
@@ -1415,27 +1416,45 @@ export class WorldScene extends Phaser.Scene {
       collisionFilter: { group: -1, category: 0, mask: 0 },
     } as any);
 
-    // Kill any existing seat tween
-    this.tweens.killTweensOf(this.playerBody.position);
+    // Make body static so physics engine won't interfere with the tween
+    this.matter.body.setStatic(this.playerBody, true);
 
-    // Anchor coords are sprite world positions - convert to body position
+    // Kill any existing seat tween
+    if (this.seatTween) {
+      this.seatTween.stop();
+      this.seatTween = null;
+    }
+
+    // Target: place body so sprite origin ends up at anchor position
     const targetBodyX = anchor.x + this.playerFeetOffsetX;
     const targetBodyY = anchor.y + this.playerFeetOffset;
 
-    this.tweens.add({
-      targets: this.playerBody.position,
-      x: targetBodyX,
-      y: targetBodyY,
+    const startX = this.playerBody.position.x;
+    const startY = this.playerBody.position.y;
+
+    this.seatTween = this.tweens.add({
+      targets: { t: 0 },
+      t: 1,
       duration: 600,
       ease: 'Power2',
-      onUpdate: () => {
-        this.player.x = Math.round(this.playerBody.position.x - this.playerFeetOffsetX);
-        this.player.y = Math.round(this.playerBody.position.y - this.playerFeetOffset);
+      onUpdate: (_tween, target) => {
+        const nx = startX + (targetBodyX - startX) * target.t;
+        const ny = startY + (targetBodyY - startY) * target.t;
+        this.matter.body.setPosition(this.playerBody, { x: nx, y: ny });
+        this.player.x = Math.round(nx - this.playerFeetOffsetX);
+        this.player.y = Math.round(ny - this.playerFeetOffset);
       },
       onComplete: () => {
+        // Snap precisely to anchor
+        this.matter.body.setPosition(this.playerBody, { x: targetBodyX, y: targetBodyY });
+        this.player.x = Math.round(anchor.x);
+        this.player.y = Math.round(anchor.y);
         this.currentDirection = anchor.direction as any;
         this.player.anims.stop();
         this.player.setFrame(getIdleFrame(this.currentDirection));
+        this.seatTween = null;
+        // Broadcast final seated position
+        this.emitMovement(false, this.currentDirection);
       },
     });
 
@@ -1468,7 +1487,10 @@ export class WorldScene extends Phaser.Scene {
     console.log('[WorldScene] unseatPlayer:', tableId, role, seat);
 
     // Kill any existing seat tween
-    this.tweens.killTweensOf(this.playerBody.position);
+    if (this.seatTween) {
+      this.seatTween.stop();
+      this.seatTween = null;
+    }
 
     if (anchors) {
       const exit = getExitAnchor(anchors, role, seat);
@@ -1476,22 +1498,39 @@ export class WorldScene extends Phaser.Scene {
         const targetBodyX = exit.x + this.playerFeetOffsetX;
         const targetBodyY = exit.y + this.playerFeetOffset;
 
-        this.tweens.add({
-          targets: this.playerBody.position,
-          x: targetBodyX,
-          y: targetBodyY,
+        const startX = this.playerBody.position.x;
+        const startY = this.playerBody.position.y;
+
+        console.log('[WorldScene] exit tween from', startX, startY, 'to', targetBodyX, targetBodyY);
+
+        this.seatTween = this.tweens.add({
+          targets: { t: 0 },
+          t: 1,
           duration: 400,
           ease: 'Power2',
-          onUpdate: () => {
-            this.player.x = Math.round(this.playerBody.position.x - this.playerFeetOffsetX);
-            this.player.y = Math.round(this.playerBody.position.y - this.playerFeetOffset);
+          onUpdate: (_tween, target) => {
+            const nx = startX + (targetBodyX - startX) * target.t;
+            const ny = startY + (targetBodyY - startY) * target.t;
+            this.matter.body.setPosition(this.playerBody, { x: nx, y: ny });
+            this.player.x = Math.round(nx - this.playerFeetOffsetX);
+            this.player.y = Math.round(ny - this.playerFeetOffset);
           },
           onComplete: () => {
+            // Snap precisely to exit point
+            this.matter.body.setPosition(this.playerBody, { x: targetBodyX, y: targetBodyY });
+            this.player.x = Math.round(exit.x);
+            this.player.y = Math.round(exit.y);
             this.currentDirection = exit.direction as any;
             this.player.anims.stop();
             this.player.setFrame(getIdleFrame(this.currentDirection));
+            this.seatTween = null;
+            // Restore body to dynamic and re-enable collisions
+            this.matter.body.setStatic(this.playerBody, false);
+            this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
             this.restorePhysics();
             this.unlockMovement();
+            // Broadcast exit position to all players
+            this.emitMovement(false, this.currentDirection);
           },
         });
         this.targetZoom = this.defaultZoom;
@@ -1500,6 +1539,9 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
+    // Fallback: no exit anchor found
+    this.matter.body.setStatic(this.playerBody, false);
+    this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
     this.restorePhysics();
     this.unlockMovement();
     this.targetZoom = this.defaultZoom;
