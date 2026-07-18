@@ -67,6 +67,7 @@ export class WorldScene extends Phaser.Scene {
   private currentDirection: Direction8 = 'down';
   private playerSpeed = MAP_CONFIG.playerSpeed;
   private playerFeetOffset = 0;
+  private playerFeetOffsetX = 0;
   private pathfinder!: AStarGrid;
   private collisionRects: { x: number; y: number; width: number; height: number }[] = [];
   private collisionPolys: { x: number; y: number }[][] = [];
@@ -279,8 +280,8 @@ export class WorldScene extends Phaser.Scene {
     if (!this.player || !this.playerBody) return;
 
     // Read final physics position -> snap to integer world pixels
-    // Body is offset down by playerFeetOffset; sprite origin is at the "torso" level
-    this.player.x = Math.floor(this.playerBody.position.x);
+    // Sprite origin = body position minus the offsets
+    this.player.x = Math.floor(this.playerBody.position.x - this.playerFeetOffsetX);
     this.player.y = Math.floor(this.playerBody.position.y - this.playerFeetOffset);
 
     // Debug visualization
@@ -697,9 +698,9 @@ export class WorldScene extends Phaser.Scene {
     this.clickMarker = { x: worldX, y: worldY };
 
     // The sprite origin should land at the click point.
-    // Since sprite.y = body.y - playerFeetOffset, the body must reach
-    // (worldX, worldY + playerFeetOffset) for the origin to be at (worldX, worldY).
-    const targetBodyX = worldX;
+    // Since sprite.x = body.x - playerFeetOffsetX and sprite.y = body.y - playerFeetOffset,
+    // the body must reach (worldX + offsetX, worldY + offsetY) for origin to be at (worldX, worldY).
+    const targetBodyX = worldX + this.playerFeetOffsetX;
     const targetBodyY = worldY + this.playerFeetOffset;
 
     const startX = this.playerBody.position.x;
@@ -804,10 +805,11 @@ export class WorldScene extends Phaser.Scene {
     // Body config comes from admin-defined values (or fallback defaults).
     const bodyConfig = getBodyConfig(charDef.id);
     const bodyRadius = bodyConfig.radius;
+    const feetOffsetX = Math.round(bodyConfig.offsetX);
     const feetOffsetY = Math.round(bodyConfig.offsetY);
 
     this.playerBody = this.matter.add.circle(
-      x, y + feetOffsetY,
+      x + feetOffsetX, y + feetOffsetY,
       bodyRadius,
       {
         label: 'player',
@@ -819,6 +821,7 @@ export class WorldScene extends Phaser.Scene {
     );
     this.matter.body.setInertia(this.playerBody, Infinity);
     this.playerFeetOffset = feetOffsetY;
+    this.playerFeetOffsetX = feetOffsetX;
   }
 
   private createAnimations() {
@@ -969,12 +972,12 @@ export class WorldScene extends Phaser.Scene {
   private emitMovement(isMoving: boolean, direction: Direction8 = this.currentDirection) {
     if (!this.movementSender) return;
     // Send sprite position (origin point), not raw body position, for remote rendering consistency
-    const spriteX = this.playerBody.position.x;
+    const spriteX = this.playerBody.position.x - this.playerFeetOffsetX;
     const spriteY = this.playerBody.position.y - this.playerFeetOffset;
     this.movementSender({
       x: spriteX,
       y: spriteY,
-      targetX: this.target?.x ? this.target.x : spriteX,
+      targetX: this.target?.x ? this.target.x - this.playerFeetOffsetX : spriteX,
       targetY: this.target?.y ? this.target.y - this.playerFeetOffset : spriteY,
       direction,
       isMoving,
@@ -1163,8 +1166,8 @@ export class WorldScene extends Phaser.Scene {
       duration: 500,
       ease: 'Power2',
       onUpdate: () => {
-        this.player.x = Math.round(this.playerBody.position.x);
-        this.player.y = Math.round(this.playerBody.position.y);
+        this.player.x = Math.round(this.playerBody.position.x - this.playerFeetOffsetX);
+        this.player.y = Math.round(this.playerBody.position.y - this.playerFeetOffset);
       },
       onComplete: () => {
         this.currentDirection = side === 'left' ? 'right' : 'left';
