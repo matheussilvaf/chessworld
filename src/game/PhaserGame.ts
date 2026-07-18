@@ -16,8 +16,8 @@ export function createPhaserGame(parent: HTMLElement): Phaser.Game {
       autoCenter: Phaser.Scale.CENTER_BOTH,
     },
     physics: {
-      default: 'arcade',
-      arcade: {
+      default: 'matter',
+      matter: {
         gravity: { x: 0, y: 0 },
         debug: false,
       },

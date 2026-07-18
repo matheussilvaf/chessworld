@@ -1,4 +1,4 @@
-export type Direction = 'up' | 'down' | 'left' | 'right';
+export type Direction = 'up' | 'down' | 'left' | 'right' | 'up-left' | 'up-right' | 'down-left' | 'down-right';
 
 export interface PlayerState {
   id: string;

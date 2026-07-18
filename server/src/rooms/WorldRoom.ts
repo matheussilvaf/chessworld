@@ -243,8 +243,8 @@ export class WorldRoom extends Room<WorldState> {
     player.username = options.username || 'Anonymous';
     player.rating = options.rating || 1200;
     player.region = options.region || 'default';
-    player.x = options.x || 800;
-    player.y = options.y || 640;
+    player.x = options.x || 1273;
+    player.y = options.y || 926;
     player.targetX = player.x;
     player.targetY = player.y;
     player.direction = 'down';
