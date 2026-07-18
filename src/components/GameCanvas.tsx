@@ -90,6 +90,15 @@ export function GameCanvas() {
           if (!tableId) return;
           const state = useGameStore.getState();
           if (state.selectedBoard || state.boardLocked) return;
+
+          // Pre-select side based on which element was clicked
+          let preSelectedSide: 'w' | 'b' | 'random' = 'random';
+          if (obj.category === 'player_seat') {
+            const pos = obj.properties.position as string;
+            if (pos === 'top') preSelectedSide = 'b'; // top seat = black
+            else preSelectedSide = 'w'; // bottom seat = white
+          }
+
           setSelectedBoard({
             id: tableId,
             name: tableId,
@@ -103,6 +112,7 @@ export function GameCanvas() {
             increment_seconds: null,
             created_at: '',
             updated_at: '',
+            preSelectedSide,
           } as any);
           return;
         }
@@ -345,6 +355,8 @@ export function GameCanvas() {
     });
 
     room.onMessage('challenge_created', (data: any) => {
+      // Store the color assignment
+      useGameStore.getState().setChallengeColor(data.color || null);
       // Seat challenger at their chosen side
       if (gameRef.current && data.boardId) {
         const worldScene = getWorldScene(gameRef.current);

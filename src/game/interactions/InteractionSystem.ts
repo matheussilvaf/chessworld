@@ -349,6 +349,16 @@ export class InteractionSystem {
     const targetY = interaction.anchor?.y ?? (interaction.y + interaction.height / 2);
     const dist = Phaser.Math.Distance.Between(playerPos.x, playerPos.y, targetX, targetY);
 
+    // Chess interactions open immediately (no walk required)
+    if (
+      interaction.category === 'chess_table' ||
+      interaction.category === 'player_seat' ||
+      interaction.category === 'spectator_seat'
+    ) {
+      this.onInteractionClick?.({ object: interaction, playerDistance: dist });
+      return;
+    }
+
     if (dist <= interaction.interactionRadius) {
       this.onInteractionClick?.({ object: interaction, playerDistance: dist });
     } else {
@@ -356,7 +366,6 @@ export class InteractionSystem {
       if (interaction.anchor) {
         this.navigateToFn(interaction.anchor.x, interaction.anchor.y);
       } else {
-        // Navigate to a point near the object, not its center (avoid collision)
         const angle = Math.atan2(playerPos.y - targetY, playerPos.x - targetX);
         const approachDist = interaction.interactionRadius * 0.7;
         this.navigateToFn(

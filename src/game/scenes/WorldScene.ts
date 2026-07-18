@@ -109,6 +109,7 @@ export class WorldScene extends Phaser.Scene {
   private interactionSystem!: InteractionSystem;
   private tableAnchorsMap: Map<string, TableAnchors> = new Map();
   private currentSeatInfo: { tableId: string; role: 'player' | 'spectator'; seat: string } | null = null;
+  private savedCollisionFilter: any = null;
 
   constructor() {
     super({ key: 'WorldScene' });
@@ -1284,15 +1285,29 @@ export class WorldScene extends Phaser.Scene {
     const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
     if (tmjData) {
       this.tableAnchorsMap = loadTableAnchors(tmjData);
+      console.log('[WorldScene] Table anchors loaded for', this.tableAnchorsMap.size, 'tables:', [...this.tableAnchorsMap.keys()].join(', '));
+      // Debug: log first table's anchors
+      const first = this.tableAnchorsMap.get('table_01');
+      if (first) {
+        console.log('[WorldScene] table_01 playerTop:', first.playerTop, 'playerBottom:', first.playerBottom);
+      }
     }
   }
 
   public seatPlayer(tableId: string, role: 'player' | 'spectator', seat: string) {
     const anchors = this.tableAnchorsMap.get(tableId);
-    if (!anchors || !this.player) return;
+    if (!anchors || !this.player) {
+      console.warn('[WorldScene] seatPlayer: no anchors for', tableId);
+      return;
+    }
 
     const anchor = getSeatAnchor(anchors, role, seat);
-    if (!anchor || anchor.x === 0) return;
+    if (!anchor || anchor.x === 0) {
+      console.warn('[WorldScene] seatPlayer: invalid anchor for', tableId, role, seat);
+      return;
+    }
+
+    console.log('[WorldScene] seatPlayer:', tableId, role, seat, 'anchor:', anchor.x, anchor.y, anchor.direction);
 
     this.currentSeatInfo = { tableId, role, seat };
     this.movementLocked = true;
@@ -1302,10 +1317,20 @@ export class WorldScene extends Phaser.Scene {
     this.finalDestination = null;
     this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
 
+    // Disable collisions so body can pass through obstacles to reach seat
+    this.savedCollisionFilter = { ...this.playerBody.collisionFilter };
+    this.matter.body.set(this.playerBody, {
+      collisionFilter: { group: -1, category: 0, mask: 0 },
+    } as any);
+
+    // Anchor coords are world sprite positions - convert to body position
+    const targetBodyX = anchor.x + this.playerFeetOffsetX;
+    const targetBodyY = anchor.y + this.playerFeetOffset;
+
     this.tweens.add({
       targets: this.playerBody.position,
-      x: anchor.x,
-      y: anchor.y,
+      x: targetBodyX,
+      y: targetBodyY,
       duration: 600,
       ease: 'Power2',
       onUpdate: () => {
@@ -1316,6 +1341,7 @@ export class WorldScene extends Phaser.Scene {
         this.currentDirection = anchor.direction as any;
         this.player.anims.stop();
         this.player.setFrame(getIdleFrame(this.currentDirection));
+        // Keep collisions disabled while seated
       },
     });
 
@@ -1327,7 +1353,7 @@ export class WorldScene extends Phaser.Scene {
       this.cameraTargetY = cam.y + cam.height / 2;
       this.targetZoom = this.boardZoom;
     } else {
-      // Fallback: zoom to board center using first arena matching this tableId
+      // Fallback: zoom to board center using arena
       const arena = this.arenas.find(a => a.id === tableId);
       if (arena) {
         this.cameraFollowing = false;
@@ -1348,13 +1374,18 @@ export class WorldScene extends Phaser.Scene {
     const anchors = this.tableAnchorsMap.get(tableId);
     this.currentSeatInfo = null;
 
+    console.log('[WorldScene] unseatPlayer:', tableId, role, seat);
+
     if (anchors) {
       const exit = getExitAnchor(anchors, role, seat);
       if (exit && exit.x !== 0) {
+        const targetBodyX = exit.x + this.playerFeetOffsetX;
+        const targetBodyY = exit.y + this.playerFeetOffset;
+
         this.tweens.add({
           targets: this.playerBody.position,
-          x: exit.x,
-          y: exit.y,
+          x: targetBodyX,
+          y: targetBodyY,
           duration: 400,
           ease: 'Power2',
           onUpdate: () => {
@@ -1365,6 +1396,13 @@ export class WorldScene extends Phaser.Scene {
             this.currentDirection = exit.direction as any;
             this.player.anims.stop();
             this.player.setFrame(getIdleFrame(this.currentDirection));
+            // Restore collisions
+            if (this.savedCollisionFilter) {
+              this.matter.body.set(this.playerBody, {
+                collisionFilter: this.savedCollisionFilter,
+              } as any);
+              this.savedCollisionFilter = null;
+            }
             this.unlockMovement();
           },
         });
@@ -1374,6 +1412,13 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
+    // Fallback: just restore collisions and unlock
+    if (this.savedCollisionFilter) {
+      this.matter.body.set(this.playerBody, {
+        collisionFilter: this.savedCollisionFilter,
+      } as any);
+      this.savedCollisionFilter = null;
+    }
     this.unlockMovement();
   }
 

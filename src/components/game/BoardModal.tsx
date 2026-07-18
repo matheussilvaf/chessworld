@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useChessStore } from '../../stores/chessStore';
-import { sendCreateChallenge, sendAcceptChallenge, sendBoardCancel, getWorldRoom } from '../../game/network/colyseusClient';
+import { sendCreateChallenge, sendAcceptChallenge, sendBoardCancel } from '../../game/network/colyseusClient';
 import { X, Loader2, Swords, Zap, Timer, Clock, Eye, Crown } from 'lucide-react';
 
 interface TimeControl {
@@ -43,28 +43,24 @@ const TIME_CONTROLS: { category: string; icon: React.ReactNode; controls: TimeCo
 ];
 
 export function BoardModal() {
-  const { selectedBoard, setSelectedBoard, setBoardLocked, colyseusBoards, matchStartedInfo, setMatchStartedInfo } = useGameStore();
+  const { selectedBoard, setSelectedBoard, setBoardLocked, colyseusBoards, matchStartedInfo, setMatchStartedInfo, challengeColor, setChallengeColor } = useGameStore();
   const { user } = useAuthStore();
   const { openMatch, openSpectate, matchId: activeMatchId, boardId: activeBoardId, reopenBoard } = useChessStore();
   const [selectedTime, setSelectedTime] = useState<TimeControl>({ label: '10 min', time: 10, increment: 0, category: 'rapid' });
-  const [selectedSide, setSelectedSide] = useState<'w' | 'b' | 'random'>('random');
+  const [selectedSide, setSelectedSide] = useState<'w' | 'b' | 'random'>(
+    (selectedBoard as any)?.preSelectedSide || 'random'
+  );
   const [isWaiting, setIsWaiting] = useState(false);
-  const [challengerColor, setChallengerColor] = useState<'w' | 'b' | null>(null);
 
-  // Listen for challenge_created from server to know which color was assigned
+  // Auto-detect waiting state from Colyseus board status
   useEffect(() => {
-    const room = getWorldRoom();
-    if (!room) return;
-
-    const handleChallengeCreated = (data: { boardId: string; color: 'w' | 'b'; seat: string }) => {
-      setChallengerColor(data.color);
-    };
-
-    room.onMessage('challenge_created', handleChallengeCreated);
-    return () => {
-      room.removeAllListeners?.();
-    };
-  }, []);
+    if (selectedBoard && colyseusBoards.length) {
+      const bs = colyseusBoards.find(b => b.id === selectedBoard.id);
+      if (bs?.status === 'waiting' && bs.waitingPlayerId === user?.id) {
+        setIsWaiting(true);
+      }
+    }
+  }, [selectedBoard, colyseusBoards, user]);
 
   // Match started: auto-open chess board
   if (matchStartedInfo) {
@@ -141,7 +137,7 @@ export function BoardModal() {
     setIsWaiting(false);
     setBoardLocked(false);
     setSelectedBoard(null);
-    setChallengerColor(null);
+    setChallengeColor(null);
   };
 
   const handleClose = () => {
@@ -171,9 +167,9 @@ export function BoardModal() {
             <p className="text-slate-400 text-sm mb-1">
               {selectedTime.label} | {selectedBoard.name?.replace(/_/g, ' ')}
             </p>
-            {challengerColor && (
+            {challengeColor && (
               <p className="text-slate-500 text-xs mb-1">
-                Playing as: <span className="text-amber-300">{challengerColor === 'w' ? 'White' : 'Black'}</span>
+                Playing as: <span className="text-amber-300">{challengeColor === 'w' ? 'White' : 'Black'}</span>
               </p>
             )}
             <p className="text-slate-500 text-xs mb-6">

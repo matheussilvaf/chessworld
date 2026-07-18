@@ -45,6 +45,7 @@ interface GameState {
   unreadChat: number;
   colyseusBoards: ColyseusBoardInfo[];
   matchStartedInfo: MatchStartedInfo | null;
+  challengeColor: 'w' | 'b' | null;
   lastEvent: string;
 
   setRegion: (region: Region) => void;
@@ -62,6 +63,7 @@ interface GameState {
   setBoardLocked: (locked: boolean) => void;
   setColyseusBoards: (boards: ColyseusBoardInfo[]) => void;
   setMatchStartedInfo: (info: MatchStartedInfo | null) => void;
+  setChallengeColor: (color: 'w' | 'b' | null) => void;
   setLastEvent: (event: string) => void;
   toggleChat: () => void;
   toggleProfile: () => void;
@@ -98,6 +100,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   unreadChat: 0,
   colyseusBoards: [],
   matchStartedInfo: null,
+  challengeColor: null,
   lastEvent: '',
 
   setRegion: (region) => set({ region }),
@@ -115,6 +118,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   setBoardLocked: (locked) => set({ boardLocked: locked }),
   setColyseusBoards: (boards) => set({ colyseusBoards: boards }),
   setMatchStartedInfo: (info) => set({ matchStartedInfo: info, lastEvent: info ? `Match started: ${info.matchId.slice(0, 8)}` : '' }),
+  setChallengeColor: (color) => set({ challengeColor: color }),
   setLastEvent: (event) => set({ lastEvent: event }),
   toggleChat: () => set((s) => ({ showChat: !s.showChat, unreadChat: !s.showChat ? 0 : s.unreadChat })),
   toggleProfile: () => set((s) => ({ showProfile: !s.showProfile })),
