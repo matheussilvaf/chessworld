@@ -7,6 +7,7 @@ import {
   getIdleFrame,
   getAnimKey,
   Direction8,
+  getBodyConfig,
 } from '../characters/characterCatalog';
 import { RemotePlayerInterpolator } from '../network/interpolation';
 import AStarGrid from '../pathfinding/AStarGrid';
@@ -306,7 +307,8 @@ export class WorldScene extends Phaser.Scene {
     this.debugGfx.clear();
     const bx = this.playerBody.position.x;
     const by = this.playerBody.position.y;
-    const radius = 10;
+    const bodyConfig = getBodyConfig();
+    const radius = bodyConfig.radius;
 
     // WHITE rectangle = full character frame canvas
     const charDef = getCharacter();
@@ -333,10 +335,6 @@ export class WorldScene extends Phaser.Scene {
     // GREEN dot = foot bottom (body center + radius)
     this.debugGfx.fillStyle(0x00ff00, 1);
     this.debugGfx.fillCircle(bx, by + radius, 3);
-
-    // YELLOW dot = body center (pathfinding navigates here)
-    this.debugGfx.fillStyle(0xffff00, 1);
-    this.debugGfx.fillCircle(bx, by, 2);
 
     // BLUE cross = click position (where user clicked)
     if (this.clickMarker) {
@@ -798,10 +796,10 @@ export class WorldScene extends Phaser.Scene {
     this.player.setDepth(100);
 
     // Collision body at the character's feet using a circle for smooth sliding.
-    // feetY is the pixel row within the frame where feet touch the ground.
-    // Body center = feetY - radius, relative to sprite origin.
-    const bodyRadius = 10;
-    const feetOffsetY = Math.round(charDef.feetY - charDef.originY * charDef.frameHeight - bodyRadius);
+    // Body config comes from admin-defined values (or fallback defaults).
+    const bodyConfig = getBodyConfig(charDef.id);
+    const bodyRadius = bodyConfig.radius;
+    const feetOffsetY = Math.round(bodyConfig.offsetY);
 
     this.playerBody = this.matter.add.circle(
       x, y + feetOffsetY,

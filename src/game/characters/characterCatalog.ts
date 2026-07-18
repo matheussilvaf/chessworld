@@ -61,8 +61,44 @@ export const CHARACTERS: Record<string, CharacterDef> = {
 
 export const DEFAULT_CHARACTER_ID = 'test-character-01';
 
+interface RuntimeCharConfig {
+  origin_x: number;
+  origin_y: number;
+  body_offset_x: number;
+  body_offset_y: number;
+  body_radius: number;
+}
+
+let runtimeConfigs: Map<string, RuntimeCharConfig> = new Map();
+
+export function applyCharacterConfig(charId: string, config: RuntimeCharConfig) {
+  runtimeConfigs.set(charId, config);
+}
+
 export function getCharacter(id?: string): CharacterDef {
-  return CHARACTERS[id || DEFAULT_CHARACTER_ID] || CHARACTERS[DEFAULT_CHARACTER_ID];
+  const charId = id || DEFAULT_CHARACTER_ID;
+  const base = CHARACTERS[charId] || CHARACTERS[DEFAULT_CHARACTER_ID];
+  const rc = runtimeConfigs.get(charId);
+  if (rc) {
+    return {
+      ...base,
+      originX: rc.origin_x,
+      originY: rc.origin_y,
+      feetY: rc.origin_y * base.frameHeight + rc.body_offset_y + rc.body_radius,
+    };
+  }
+  return base;
+}
+
+export function getBodyConfig(id?: string): { offsetX: number; offsetY: number; radius: number } {
+  const charId = id || DEFAULT_CHARACTER_ID;
+  const rc = runtimeConfigs.get(charId);
+  if (rc) {
+    return { offsetX: rc.body_offset_x, offsetY: rc.body_offset_y, radius: rc.body_radius };
+  }
+  const base = CHARACTERS[charId] || CHARACTERS[DEFAULT_CHARACTER_ID];
+  const offsetY = base.feetY - base.originY * base.frameHeight - 10;
+  return { offsetX: 0, offsetY, radius: 10 };
 }
 
 export function getIdleFrame(dir: Direction8): number {

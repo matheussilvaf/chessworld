@@ -7,6 +7,7 @@ import { useChessStore } from '../stores/chessStore';
 import { useGameSettingsStore } from '../stores/gameSettingsStore';
 import { getWorldRoom, registerBoards, sendMovement } from '../game/network/colyseusClient';
 import { useColyseusStore } from '../hooks/useColyseusConnection';
+import { loadCharacterConfigs } from '../config/loadCharacterConfigs';
 import type { WorldScene } from '../game/scenes/WorldScene';
 import type { Room } from 'colyseus.js';
 
@@ -21,6 +22,8 @@ export function GameCanvas() {
 
   useEffect(() => {
     if (!containerRef.current || gameRef.current) return;
+
+    loadCharacterConfigs();
 
     const game = createPhaserGame(containerRef.current);
     gameRef.current = game;

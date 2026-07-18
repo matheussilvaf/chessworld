@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Settings, Gauge, ZoomIn, ArrowLeft } from 'lucide-react';
+import { Settings, Gauge, ZoomIn, ArrowLeft, Crosshair } from 'lucide-react';
 
 interface GameSettings {
   default_zoom: number;
@@ -211,7 +211,22 @@ export function AdminPage() {
         </div>
 
         {/* Footer info */}
-        <p className="mt-8 text-center text-xs text-slate-600">
+        <div className="mt-8 pt-6 border-t border-slate-800">
+          <a
+            href="/admin/characters"
+            className="flex items-center gap-3 px-5 py-4 rounded-xl bg-slate-900 border border-slate-800 hover:border-cyan-500/30 hover:bg-slate-800/80 transition-all group"
+          >
+            <div className="w-9 h-9 rounded-lg bg-cyan-500/10 flex items-center justify-center group-hover:bg-cyan-500/20 transition-colors">
+              <Crosshair className="w-4 h-4 text-cyan-400" />
+            </div>
+            <div>
+              <h3 className="text-sm font-medium text-white">Character Configuration</h3>
+              <p className="text-xs text-slate-400">Edit origin, collision body, and frame positions</p>
+            </div>
+          </a>
+        </div>
+
+        <p className="mt-6 text-center text-xs text-slate-600">
           Changes are applied in real-time to all connected players.
         </p>
       </div>
