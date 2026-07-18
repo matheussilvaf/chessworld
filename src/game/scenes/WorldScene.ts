@@ -608,8 +608,8 @@ export class WorldScene extends Phaser.Scene {
 
   private buildPathfindingGrid(mapWidth: number, mapHeight: number) {
     this.pathfinder = new AStarGrid(16);
-    // Inflate obstacles by player body half-width (12px) + margin
-    this.pathfinder.buildGrid(mapWidth, mapHeight, this.collisionRects, this.collisionPolys, 14);
+    // Inflate obstacles by player body radius (10px) + margin
+    this.pathfinder.buildGrid(mapWidth, mapHeight, this.collisionRects, this.collisionPolys, 12);
   }
 
   private navigateTo(worldX: number, worldY: number) {
@@ -712,23 +712,20 @@ export class WorldScene extends Phaser.Scene {
     this.player.setOrigin(charDef.originX, charDef.originY);
     this.player.setDepth(100);
 
-    // Collision body at the character's feet.
-    // Sprite originY=0.769 on 104px frame means feet are 24px below origin.
-    // We offset the body downward so its center aligns with the feet area.
-    const bodyW = 24;
-    const bodyH = 12;
-    const feetOffsetY = Math.round((1 - charDef.originY) * charDef.frameHeight - bodyH / 2);
+    // Collision body at the character's feet using a circle for smooth sliding.
+    // A circle prevents corner-cutting and can't squeeze through diagonal gaps.
+    const bodyRadius = 10;
+    const feetOffsetY = Math.round((1 - charDef.originY) * charDef.frameHeight - bodyRadius);
 
-    this.playerBody = this.matter.add.rectangle(
+    this.playerBody = this.matter.add.circle(
       x, y + feetOffsetY,
-      bodyW, bodyH,
+      bodyRadius,
       {
         label: 'player',
         friction: 0,
         frictionAir: 0,
         frictionStatic: 0,
         restitution: 0,
-        chamfer: { radius: 3 },
       }
     );
     this.matter.body.setInertia(this.playerBody, Infinity);
@@ -744,7 +741,7 @@ export class WorldScene extends Phaser.Scene {
       this.anims.create({
         key: getAnimKey(dir),
         frames: this.anims.generateFrameNumbers(charDef.id, { start, end }),
-        frameRate: 9,
+        frameRate: 12,
         repeat: -1,
       });
     }
@@ -843,6 +840,9 @@ export class WorldScene extends Phaser.Scene {
     const dir = this.getDirection8(tdx, tdy);
     this.currentDirection = dir;
     this.player.anims.play(getAnimKey(dir), true);
+    // Scale animation speed proportionally to movement speed (base: speed=3, frameRate=9)
+    const animSpeed = this.playerSpeed / MAP_CONFIG.playerSpeed;
+    this.player.anims.timeScale = animSpeed;
 
     const now = Date.now();
     if (now - this.lastSentTime >= this.SEND_INTERVAL) {
