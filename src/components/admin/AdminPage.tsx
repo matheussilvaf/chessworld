@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Settings, Gauge, ZoomIn, ArrowLeft, Crosshair, Bug } from 'lucide-react';
+import { useInteractionStore } from '../../stores/interactionStore';
+import { Settings, Gauge, ZoomIn, ArrowLeft, Crosshair, Bug, Waypoints } from 'lucide-react';
 
 interface GameSettings {
   default_zoom: number;
@@ -11,6 +12,7 @@ interface GameSettings {
 export function AdminPage() {
   const [settings, setSettings] = useState<GameSettings>({ default_zoom: 2, player_speed: 3, show_debug_visuals: false });
   const [saving, setSaving] = useState(false);
+  const { debugEnabled, setDebugEnabled } = useInteractionStore();
   const [lastSaved, setLastSaved] = useState<string | null>(null);
 
   useEffect(() => {
@@ -212,6 +214,33 @@ export function AdminPage() {
                   {s}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Interaction Debug Toggle */}
+          <div className="bg-slate-900 rounded-xl border border-slate-800 p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                  <Waypoints className="w-4 h-4 text-amber-400" />
+                </div>
+                <div>
+                  <h2 className="text-base font-medium text-white">Interaction Debug</h2>
+                  <p className="text-sm text-slate-400">Show debug modals for map interactions (tables, houses, buildings)</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setDebugEnabled(!debugEnabled)}
+                className={`relative w-12 h-6 rounded-full transition-colors ${
+                  debugEnabled ? 'bg-amber-500' : 'bg-slate-700'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                    debugEnabled ? 'translate-x-6' : 'translate-x-0'
+                  }`}
+                />
+              </button>
             </div>
           </div>
 

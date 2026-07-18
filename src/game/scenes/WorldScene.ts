@@ -11,6 +11,8 @@ import {
 } from '../characters/characterCatalog';
 import { RemotePlayerInterpolator } from '../network/interpolation';
 import AStarGrid from '../pathfinding/AStarGrid';
+import { InteractionSystem } from '../interactions/InteractionSystem';
+import type { InteractionEvent, InteractionObject, ZoneChangeEvent } from '../interactions/InteractionSystem';
 
 interface ChessArenaZone {
   id: string;
@@ -97,6 +99,12 @@ export class WorldScene extends Phaser.Scene {
   public onHouseClick?: (houseId: string) => void;
   public onPositionUpdate?: (x: number, y: number) => void;
   public onPlayerClick?: (userId: string) => void;
+  public onInteractionClick?: (event: InteractionEvent) => void;
+  public onProximityEnter?: (event: InteractionEvent) => void;
+  public onProximityExit?: (obj: InteractionObject) => void;
+  public onZoneChange?: (event: ZoneChangeEvent) => void;
+
+  private interactionSystem!: InteractionSystem;
 
   constructor() {
     super({ key: 'WorldScene' });
@@ -220,7 +228,18 @@ export class WorldScene extends Phaser.Scene {
       );
       if (dist > DRAG_THRESHOLD) return;
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+      // Don't walk if pointer is over an interactive object (handled by InteractionSystem)
+      if (this.interactionSystem?.hitTestPointer(worldPoint.x, worldPoint.y)) return;
       this.navigateTo(worldPoint.x, worldPoint.y);
+    });
+
+    // "E" key for confirming proximity interactions
+    this.input.keyboard?.on('keydown-E', () => {
+      this.confirmProximityInteraction();
+    });
+
+    this.events.once('shutdown', () => {
+      this.interactionSystem?.destroy();
     });
 
     // Setup zoom controls
@@ -287,6 +306,11 @@ export class WorldScene extends Phaser.Scene {
 
     // Debug visualization
     this.drawDebug();
+
+    // Check interaction proximity (runs every 10 frames for performance)
+    if (this.interactionSystem && this.game.loop.frame % 10 === 0) {
+      this.interactionSystem.checkProximity();
+    }
 
     // Update camera target from final player position with smooth lerp.
     // Higher lerp while moving for responsive tracking; lower when stopped for smooth coast.
@@ -761,34 +785,49 @@ export class WorldScene extends Phaser.Scene {
     this.emitMovement(false);
   }
 
-  private setupInteractives(map: Phaser.Tilemaps.Tilemap) {
-    const ctLayer = map.objects.find(l => l.name === 'chess_tables_interactions');
-    if (!ctLayer) return;
+  private setupInteractives(_map: Phaser.Tilemaps.Tilemap) {
+    const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
+    if (!tmjData) return;
 
-    let arenaCount = 0;
-    for (const obj of ctLayer.objects) {
-      const objName = obj.name || '';
-      if (!objName.includes('_board')) continue;
+    this.interactionSystem = new InteractionSystem(
+      this,
+      () => ({ x: this.player.x, y: this.player.y }),
+      (x: number, y: number) => this.navigateTo(x, y),
+    );
 
-      const props: any[] = (obj as any).properties || [];
-      const tableId = props.find((p: any) => p.name === 'tableId')?.value || '';
-      const id = tableId || `arena_${arenaCount + 1}`;
-      const title = objName;
-      const w = obj.width || 80;
-      const h = obj.height || 80;
-      const x = obj.x || 0;
-      const y = obj.y || 0;
+    this.interactionSystem.onInteractionClick = (event) => {
+      this.onInteractionClick?.(event);
+    };
+    this.interactionSystem.onProximityEnter = (event) => {
+      this.onProximityEnter?.(event);
+    };
+    this.interactionSystem.onProximityExit = (obj) => {
+      this.onProximityExit?.(obj);
+    };
+    this.interactionSystem.onZoneChange = (event) => {
+      this.onZoneChange?.(event);
+    };
 
-      const zone = this.add.zone(x + w / 2, y + h / 2, w, h);
-      zone.setInteractive({ useHandCursor: true });
-      zone.setDepth(50);
-      zone.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-        pointer.event.stopPropagation();
-        if (this.onBoardClick) this.onBoardClick(id, title);
-      });
+    this.interactionSystem.loadFromTMJ(tmjData);
 
-      this.arenas.push({ id, name: objName, title, x, y, width: w, height: h, zone });
-      arenaCount++;
+    // Also keep old arenas array for BoardModal backwards compatibility
+    const ctLayer = _map.objects.find(l => l.name === 'chess_tables_interactions');
+    if (ctLayer) {
+      let arenaCount = 0;
+      for (const obj of ctLayer.objects) {
+        const objName = obj.name || '';
+        if (!objName.includes('_board')) continue;
+        const props: any[] = (obj as any).properties || [];
+        const tableId = props.find((p: any) => p.name === 'tableId')?.value || '';
+        const id = tableId || `arena_${arenaCount + 1}`;
+        const title = objName;
+        const w = obj.width || 80;
+        const h = obj.height || 80;
+        const x = obj.x || 0;
+        const y = obj.y || 0;
+        this.arenas.push({ id, name: objName, title, x, y, width: w, height: h, zone: null as any });
+        arenaCount++;
+      }
     }
   }
 
@@ -1226,5 +1265,13 @@ export class WorldScene extends Phaser.Scene {
   public setShowDebugVisuals(show: boolean) {
     this.showDebugVisuals = show;
     if (!show) this.debugGfx.clear();
+  }
+
+  public confirmProximityInteraction() {
+    this.interactionSystem?.confirmProximityInteraction();
+  }
+
+  public getInteractionStats() {
+    return this.interactionSystem?.getStats() || {};
   }
 }

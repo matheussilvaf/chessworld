@@ -5,6 +5,7 @@ import { useGameStore } from '../stores/gameStore';
 import { useAuthStore } from '../stores/authStore';
 import { useChessStore } from '../stores/chessStore';
 import { useGameSettingsStore } from '../stores/gameSettingsStore';
+import { useInteractionStore } from '../stores/interactionStore';
 import { getWorldRoom, registerBoards, sendMovement } from '../game/network/colyseusClient';
 import { useColyseusStore } from '../hooks/useColyseusConnection';
 import { loadCharacterConfigs } from '../config/loadCharacterConfigs';
@@ -76,6 +77,29 @@ export function GameCanvas() {
       };
 
       scene.onPositionUpdate = () => {};
+
+      // Wire interaction system events to store
+      scene.onInteractionClick = (event) => {
+        const store = useInteractionStore.getState();
+        if (store.debugEnabled) {
+          store.openModal({ object: event.object, playerDistance: event.playerDistance });
+        }
+      };
+      scene.onProximityEnter = (event) => {
+        useInteractionStore.getState().setProximityObject(event.object);
+      };
+      scene.onProximityExit = () => {
+        useInteractionStore.getState().setProximityObject(null);
+      };
+      scene.onZoneChange = (event) => {
+        const store = useInteractionStore.getState();
+        if (event.entered) {
+          store.setCurrentZone({ zoneId: event.zoneId, zoneName: event.zoneName, zoneType: event.zoneType });
+        } else {
+          store.setCurrentZone(null);
+        }
+        store.showZoneNotification(event);
+      };
 
       tryAttachListeners(scene);
     };

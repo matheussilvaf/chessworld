@@ -14,6 +14,9 @@ import { FriendRequests } from './components/game/FriendRequests';
 import { SettingsModal } from './components/game/SettingsModal';
 import { VoiceChatPanel } from './components/game/VoiceChatPanel';
 import { ChessBoard } from './components/chess/ChessBoard';
+import { InteractionDebugModal } from './components/game/InteractionDebugModal';
+import { ProximityButton } from './components/game/ProximityButton';
+import { ZoneIndicator } from './components/game/ZoneIndicator';
 import { useColyseusConnection } from './hooks/useColyseusConnection';
 import { leaveWorldRoom } from './game/network/colyseusClient';
 import { Loader2 } from 'lucide-react';
@@ -71,6 +74,9 @@ function GameScene() {
       <FriendRequests />
       <SettingsModal />
       <VoiceChatPanel />
+      <InteractionDebugModal />
+      <ProximityButton />
+      <ZoneIndicator />
       {showChessBoard && <ChessBoard />}
     </div>
   );
