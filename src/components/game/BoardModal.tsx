@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useAuthStore } from '../../stores/authStore';
-import { useChessStore } from '../../stores/chessStore';
 import { sendCreateChallenge, sendAcceptChallenge, sendBoardCancel } from '../../game/network/colyseusClient';
 import { X, Loader2, Swords, Zap, Timer, Clock, Eye, Crown } from 'lucide-react';
 
@@ -43,16 +42,14 @@ const TIME_CONTROLS: { category: string; icon: React.ReactNode; controls: TimeCo
 ];
 
 export function BoardModal() {
-  const { selectedBoard, setSelectedBoard, setBoardLocked, colyseusBoards, matchStartedInfo, setMatchStartedInfo, challengeColor, setChallengeColor } = useGameStore();
+  const { selectedBoard, setSelectedBoard, setBoardLocked, colyseusBoards, challengeColor, setChallengeColor } = useGameStore();
   const { user } = useAuthStore();
-  const { openMatch, openSpectate, matchId: activeMatchId, boardId: activeBoardId, reopenBoard } = useChessStore();
   const [selectedTime, setSelectedTime] = useState<TimeControl>({ label: '10 min', time: 10, increment: 0, category: 'rapid' });
   const [selectedSide, setSelectedSide] = useState<'w' | 'b' | 'random'>(
     (selectedBoard as any)?.preSelectedSide || 'random'
   );
   const [isWaiting, setIsWaiting] = useState(false);
 
-  // Auto-detect waiting state from Colyseus board status
   useEffect(() => {
     if (selectedBoard && colyseusBoards.length) {
       const bs = colyseusBoards.find(b => b.id === selectedBoard.id);
@@ -62,41 +59,6 @@ export function BoardModal() {
     }
   }, [selectedBoard, colyseusBoards, user]);
 
-  // Match started: auto-open chess board
-  if (matchStartedInfo) {
-    const handleOpenMatch = () => {
-      if (user) {
-        openMatch(matchStartedInfo.matchId, matchStartedInfo.color, user.id);
-      }
-      setMatchStartedInfo(null);
-      setIsWaiting(false);
-      setBoardLocked(false);
-      setSelectedBoard(null);
-    };
-
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-        <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-sm overflow-hidden shadow-2xl">
-          <div className="p-6 text-center">
-            <div className="w-16 h-16 mx-auto rounded-full bg-emerald-500/20 border-2 border-emerald-500/50 flex items-center justify-center mb-4">
-              <Swords className="w-7 h-7 text-emerald-400" />
-            </div>
-            <h3 className="text-white font-bold text-lg mb-2">Match Started!</h3>
-            <p className="text-slate-400 text-sm mb-1">
-              You play as: <span className="text-amber-400 font-semibold">{matchStartedInfo.color === 'w' ? 'White' : 'Black'}</span>
-            </p>
-            <button
-              onClick={handleOpenMatch}
-              className="w-full py-3 rounded-xl font-semibold bg-gradient-to-r from-emerald-500 to-emerald-600 text-white hover:from-emerald-600 hover:to-emerald-700 shadow-lg shadow-emerald-500/20 transition-all mt-4"
-            >
-              Play!
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   if (!selectedBoard) return null;
 
   const boardState = colyseusBoards.find(b => b.id === selectedBoard.id || b.name === selectedBoard.name);
@@ -104,14 +66,6 @@ export function BoardModal() {
   const isWaitingOnServer = colyseusStatus === 'waiting';
   const isPlaying = colyseusStatus === 'playing';
   const waitingPlayerIsMe = boardState?.waitingPlayerId === user?.id;
-
-  // If this board has my active match, reopen it
-  if (isPlaying && activeMatchId && activeBoardId === selectedBoard.id) {
-    reopenBoard();
-    setSelectedBoard(null);
-    setBoardLocked(false);
-    return null;
-  }
 
   const handleCreateChallenge = () => {
     if (!user) return;
@@ -129,6 +83,8 @@ export function BoardModal() {
   const handleAcceptChallenge = () => {
     if (!user) return;
     sendAcceptChallenge(selectedBoard.id);
+    setSelectedBoard(null);
+    setBoardLocked(false);
   };
 
   const handleCancelWaiting = () => {
@@ -145,13 +101,6 @@ export function BoardModal() {
       setBoardLocked(false);
       setSelectedBoard(null);
     }
-  };
-
-  const handleSpectate = () => {
-    if (!boardState?.matchId) return;
-    openSpectate(boardState.matchId);
-    setSelectedBoard(null);
-    setBoardLocked(false);
   };
 
   // Waiting state
@@ -208,7 +157,7 @@ export function BoardModal() {
                 Close
               </button>
               <button
-                onClick={handleSpectate}
+                onClick={() => { handleClose(); }}
                 className="flex-1 py-3 rounded-xl font-semibold bg-blue-500/15 text-blue-400 border border-blue-500/30 hover:bg-blue-500/25 transition-colors flex items-center justify-center gap-2"
               >
                 <Eye className="w-4 h-4" />
@@ -294,7 +243,6 @@ export function BoardModal() {
         </div>
 
         <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
-          {/* Time controls */}
           {TIME_CONTROLS.map((category) => (
             <div key={category.category}>
               <div className="flex items-center gap-2 mb-2">
@@ -322,7 +270,6 @@ export function BoardModal() {
             </div>
           ))}
 
-          {/* Side selection */}
           <div>
             <div className="flex items-center gap-2 mb-2">
               <Crown className="w-4 h-4 text-blue-400" />

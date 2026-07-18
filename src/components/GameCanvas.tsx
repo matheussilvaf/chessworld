@@ -341,34 +341,48 @@ export function GameCanvas() {
     });
 
     room.onMessage('match_started', (data: any) => {
-      useGameStore.getState().setMatchStartedInfo(data);
       useGameStore.getState().setLastEvent(`match_started ${data.matchId.slice(0, 8)}`);
-      // Seat the player at the correct anchor
+      const userId = useAuthStore.getState().user?.id;
+      if (!userId) return;
+
+      // Close the board modal
+      useGameStore.getState().setSelectedBoard(null);
+      useGameStore.getState().setBoardLocked(false);
+
+      // Open the match in the chess store (enables interaction logic)
+      useChessStore.getState().openMatch(data.matchId, data.color, userId, data.boardId);
+
       if (gameRef.current) {
         const worldScene = getWorldScene(gameRef.current);
         if (worldScene && data.boardId) {
+          // Seat at correct side: white=bottom, black=top
           const seat = data.color === 'w' ? 'bottom' : 'top';
           worldScene.seatPlayer(data.boardId, 'player', seat);
-          // Show initial position on the overlay
-          worldScene.updateBoardFEN(data.boardId, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+          // Show initial position and activate interactive overlay
+          const initialFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+          worldScene.updateBoardFEN(data.boardId, initialFen);
+          worldScene.activateOverlayInteraction(data.boardId);
         }
       }
     });
 
     room.onMessage('match_finished', (data: any) => {
       useGameStore.getState().setLastEvent(`match_finished: ${data.result}`);
-      // Unseat after delay so player can see result
+      // Sync game over state to chessStore
+      useChessStore.getState().syncFromColyseus(data);
+      // Unseat and clean up after delay
       setTimeout(() => {
         if (gameRef.current) {
           const worldScene = getWorldScene(gameRef.current);
           if (worldScene) {
+            worldScene.deactivateOverlayInteraction();
             worldScene.unseatPlayer();
-            // Clear overlay on the board
             if (data.boardId) {
               worldScene.updateBoardStatus(data.boardId, 'idle');
             }
           }
         }
+        useChessStore.getState().reset();
       }, 3000);
     });
 

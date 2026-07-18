@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { useAuthStore } from './stores/authStore';
 import { useGameStore } from './stores/gameStore';
-import { useChessStore } from './stores/chessStore';
 import { AuthPage } from './components/auth/AuthPage';
 import { ServerSelect } from './components/game/ServerSelect';
 import { GameCanvas } from './components/GameCanvas';
@@ -13,7 +12,7 @@ import { HouseModal } from './components/game/HouseModal';
 import { FriendRequests } from './components/game/FriendRequests';
 import { SettingsModal } from './components/game/SettingsModal';
 import { VoiceChatPanel } from './components/game/VoiceChatPanel';
-import { ChessBoard } from './components/chess/ChessBoard';
+
 import { InteractionDebugModal } from './components/game/InteractionDebugModal';
 import { ProximityButton } from './components/game/ProximityButton';
 import { ZoneIndicator } from './components/game/ZoneIndicator';
@@ -53,7 +52,6 @@ function App() {
 
 function GameScene() {
   useColyseusConnection();
-  const showChessBoard = useChessStore((s) => s.showBoard);
 
   useEffect(() => {
     const handleBeforeUnload = () => {
@@ -77,7 +75,6 @@ function GameScene() {
       <InteractionDebugModal />
       <ProximityButton />
       <ZoneIndicator />
-      {showChessBoard && <ChessBoard />}
     </div>
   );
 }

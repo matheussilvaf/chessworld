@@ -1,7 +1,11 @@
 import Phaser from 'phaser';
+import { useChessStore } from '../../stores/chessStore';
 
 const LIGHT_COLOR = 0xf0d9b5;
 const DARK_COLOR = 0xb58863;
+const SELECTED_COLOR = 0x829769;
+const VALID_MOVE_COLOR = 0x646f40;
+const LAST_MOVE_COLOR = 0xcdd26a;
 
 const PIECE_IMAGE_MAP: Record<string, string> = {
   wk: 'overlay_wk', wq: 'overlay_wq', wr: 'overlay_wr',
@@ -25,6 +29,9 @@ const PIECE_PATHS: Record<string, string> = {
   overlay_bp: 'assets/chesspieces/blackpawn.png',
 };
 
+const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'];
+
 export interface TableOverlayConfig {
   tableId: string;
   x: number;
@@ -33,16 +40,24 @@ export interface TableOverlayConfig {
   height: number;
 }
 
+interface ActiveOverlay {
+  container: Phaser.GameObjects.Container;
+  boardGfx: Phaser.GameObjects.Graphics;
+  highlightGfx: Phaser.GameObjects.Graphics;
+  pieces: Phaser.GameObjects.Image[];
+  hitZones: Phaser.GameObjects.Zone[];
+  banner?: Phaser.GameObjects.Container;
+  currentFen: string;
+}
+
 export class ChessOverlayManager {
   private scene: Phaser.Scene;
-  private overlays = new Map<string, {
-    container: Phaser.GameObjects.Container;
-    boardGfx: Phaser.GameObjects.Graphics;
-    pieces: Phaser.GameObjects.Image[];
-    banner?: Phaser.GameObjects.Container;
-  }>();
+  private overlays = new Map<string, ActiveOverlay>();
   private configs = new Map<string, TableOverlayConfig>();
   private assetsLoaded = false;
+  private selectedSquare: string | null = null;
+  private validMoves: string[] = [];
+  private activeTableId: string | null = null;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -83,13 +98,20 @@ export class ChessOverlayManager {
 
     this.removeBanner(tableId);
     overlay.container.setVisible(true);
-    this.renderFEN(overlay, config, fen);
+    overlay.currentFen = fen;
+    this.renderBoard(tableId);
   }
 
   hideMatchOverlay(tableId: string) {
     const overlay = this.overlays.get(tableId);
     if (overlay) {
       overlay.container.setVisible(false);
+      this.clearHitZones(overlay);
+    }
+    if (this.activeTableId === tableId) {
+      this.selectedSquare = null;
+      this.validMoves = [];
+      this.activeTableId = null;
     }
   }
 
@@ -193,29 +215,64 @@ export class ChessOverlayManager {
     this.hideMatchOverlay(tableId);
   }
 
-  private createOverlay(config: TableOverlayConfig) {
-    const container = this.scene.add.container(config.x, config.y).setDepth(150);
-    const boardGfx = this.scene.add.graphics();
-    container.add(boardGfx);
-    container.setVisible(false);
-
-    return { container, boardGfx, pieces: [] as Phaser.GameObjects.Image[] };
+  setActiveTable(tableId: string) {
+    this.activeTableId = tableId;
+    this.selectedSquare = null;
+    this.validMoves = [];
+    this.renderBoard(tableId);
   }
 
-  private renderFEN(
-    overlay: { container: Phaser.GameObjects.Container; boardGfx: Phaser.GameObjects.Graphics; pieces: Phaser.GameObjects.Image[] },
-    config: TableOverlayConfig,
-    fen: string
-  ) {
-    const { boardGfx, container } = overlay;
+  clearActiveTable() {
+    const prev = this.activeTableId;
+    this.activeTableId = null;
+    this.selectedSquare = null;
+    this.validMoves = [];
+    if (prev) this.renderBoard(prev);
+  }
+
+  refreshBoard(tableId: string, fen: string) {
+    const overlay = this.overlays.get(tableId);
+    if (!overlay) return;
+    overlay.currentFen = fen;
+    this.selectedSquare = null;
+    this.validMoves = [];
+    this.renderBoard(tableId);
+  }
+
+  private createOverlay(config: TableOverlayConfig): ActiveOverlay {
+    const container = this.scene.add.container(config.x, config.y).setDepth(150);
+    const boardGfx = this.scene.add.graphics();
+    const highlightGfx = this.scene.add.graphics();
+    container.add([boardGfx, highlightGfx]);
+    container.setVisible(false);
+
+    return {
+      container,
+      boardGfx,
+      highlightGfx,
+      pieces: [],
+      hitZones: [],
+      currentFen: '',
+    };
+  }
+
+  private renderBoard(tableId: string) {
+    const overlay = this.overlays.get(tableId);
+    const config = this.configs.get(tableId);
+    if (!overlay || !config) return;
+
+    const { boardGfx, highlightGfx, container } = overlay;
     const sqW = config.width / 8;
     const sqH = config.height / 8;
 
+    // Clear previous
     boardGfx.clear();
+    highlightGfx.clear();
     for (const p of overlay.pieces) p.destroy();
     overlay.pieces = [];
+    this.clearHitZones(overlay);
 
-    // Draw board squares filling the entire overlay area
+    // Draw board squares
     for (let rank = 0; rank < 8; rank++) {
       for (let file = 0; file < 8; file++) {
         const isLight = (rank + file) % 2 === 0;
@@ -224,8 +281,48 @@ export class ChessOverlayManager {
       }
     }
 
+    // Draw highlights (selected square, valid moves)
+    if (this.activeTableId === tableId && this.selectedSquare) {
+      const selFile = FILES.indexOf(this.selectedSquare[0]);
+      const selRank = RANKS.indexOf(this.selectedSquare[1]);
+      if (selFile >= 0 && selRank >= 0) {
+        highlightGfx.fillStyle(SELECTED_COLOR, 0.8);
+        highlightGfx.fillRect(selFile * sqW, selRank * sqH, sqW, sqH);
+      }
+
+      for (const move of this.validMoves) {
+        const mFile = FILES.indexOf(move[0]);
+        const mRank = RANKS.indexOf(move[1]);
+        if (mFile >= 0 && mRank >= 0) {
+          highlightGfx.fillStyle(VALID_MOVE_COLOR, 0.6);
+          highlightGfx.fillCircle(mFile * sqW + sqW / 2, mRank * sqH + sqH / 2, sqW * 0.2);
+        }
+      }
+    }
+
+    // Draw last move highlight from chess store
+    const chessState = useChessStore.getState();
+    if (chessState.game && chessState.boardId === tableId) {
+      const history = chessState.game.history({ verbose: true });
+      if (history.length > 0) {
+        const lastMove = history[history.length - 1];
+        const fromFile = FILES.indexOf(lastMove.from[0]);
+        const fromRank = RANKS.indexOf(lastMove.from[1]);
+        const toFile = FILES.indexOf(lastMove.to[0]);
+        const toRank = RANKS.indexOf(lastMove.to[1]);
+        if (fromFile >= 0 && fromRank >= 0) {
+          highlightGfx.fillStyle(LAST_MOVE_COLOR, 0.4);
+          highlightGfx.fillRect(fromFile * sqW, fromRank * sqH, sqW, sqH);
+        }
+        if (toFile >= 0 && toRank >= 0) {
+          highlightGfx.fillStyle(LAST_MOVE_COLOR, 0.4);
+          highlightGfx.fillRect(toFile * sqW, toRank * sqH, sqW, sqH);
+        }
+      }
+    }
+
     // Parse FEN and place piece images
-    const fenParts = fen.split(' ')[0];
+    const fenParts = overlay.currentFen.split(' ')[0];
     const ranks = fenParts.split('/');
     for (let rank = 0; rank < 8; rank++) {
       let file = 0;
@@ -254,5 +351,63 @@ export class ChessOverlayManager {
         }
       }
     }
+
+    // Add interactive hit zones only if this is the active table for the local player
+    if (this.activeTableId === tableId) {
+      for (let rank = 0; rank < 8; rank++) {
+        for (let file = 0; file < 8; file++) {
+          const zone = this.scene.add.zone(
+            config.x + file * sqW + sqW / 2,
+            config.y + rank * sqH + sqH / 2,
+            sqW,
+            sqH,
+          ).setInteractive({ useHandCursor: true }).setDepth(151);
+
+          const square = FILES[file] + RANKS[rank];
+          zone.on('pointerdown', () => this.handleSquareClick(tableId, square));
+          overlay.hitZones.push(zone);
+        }
+      }
+    }
+  }
+
+  private handleSquareClick(tableId: string, square: string) {
+    if (this.activeTableId !== tableId) return;
+
+    const store = useChessStore.getState();
+    if (!store.game || !store.playerColor || store.gameOver || store.isSpectating) return;
+
+    const isMyTurn = store.turn === store.playerColor;
+
+    if (this.selectedSquare) {
+      // Second click - try to make move
+      if (this.validMoves.includes(square)) {
+        store.makeMove(this.selectedSquare, square);
+        this.selectedSquare = null;
+        this.validMoves = [];
+        return;
+      }
+      // Clicked same square or invalid - deselect
+      this.selectedSquare = null;
+      this.validMoves = [];
+      this.renderBoard(tableId);
+      return;
+    }
+
+    // First click - select piece
+    if (!isMyTurn) return;
+
+    const piece = store.game.get(square as any);
+    if (piece && piece.color === store.playerColor) {
+      const moves = store.game.moves({ square: square as any, verbose: true });
+      this.selectedSquare = square;
+      this.validMoves = moves.map(m => m.to);
+      this.renderBoard(tableId);
+    }
+  }
+
+  private clearHitZones(overlay: ActiveOverlay) {
+    for (const z of overlay.hitZones) z.destroy();
+    overlay.hitZones = [];
   }
 }

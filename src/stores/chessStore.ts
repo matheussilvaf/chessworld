@@ -26,7 +26,7 @@ interface ChessState {
   blackPlayerId: string;
   showBoard: boolean;
 
-  openMatch: (matchId: string, color: 'w' | 'b', userId: string) => void;
+  openMatch: (matchId: string, color: 'w' | 'b', userId: string, boardId?: string) => void;
   openSpectate: (matchId: string) => void;
   syncFromColyseus: (matchData: any) => void;
   selectSquare: (square: string) => void;
@@ -61,43 +61,42 @@ export const useChessStore = create<ChessState>((set, get) => ({
   blackPlayerId: '',
   showBoard: false,
 
-  openMatch: (matchId, color, _userId) => {
+  openMatch: (matchId, color, _userId, boardIdArg) => {
     const room = getWorldRoom();
-    if (!room?.state?.matches) return;
-
     let matchData: any = null;
-    room.state.matches.forEach((m: any, id: string) => {
-      if (id === matchId) matchData = m;
-    });
+    if (room?.state?.matches) {
+      room.state.matches.forEach((m: any, id: string) => {
+        if (id === matchId) matchData = m;
+      });
+    }
 
-    if (!matchData) return;
-
-    const game = new Chess(matchData.fen || undefined);
+    const fen = matchData?.fen || undefined;
+    const game = new Chess(fen);
+    const boardId = boardIdArg || matchData?.boardId || null;
 
     chessAudio.play('startGame');
 
     set({
       matchId,
-      boardId: matchData.boardId,
+      boardId,
       game,
       playerColor: color,
-      isMyTurn: matchData.turn === color,
-      gameOver: matchData.status !== 'playing',
-      result: matchData.result || null,
-      winnerId: matchData.winnerId || null,
+      isMyTurn: (matchData?.turn || 'w') === color,
+      gameOver: matchData ? matchData.status !== 'playing' : false,
+      result: matchData?.result || null,
+      winnerId: matchData?.winnerId || null,
       isSpectating: false,
-      whiteTimeMs: matchData.whiteTimeMs,
-      blackTimeMs: matchData.blackTimeMs,
-      lastMoveAt: matchData.lastMoveAt,
-      incrementMs: matchData.incrementMs || 0,
-      turn: matchData.turn,
-      whitePlayerName: matchData.whitePlayerName || 'White',
-      blackPlayerName: matchData.blackPlayerName || 'Black',
-      whitePlayerId: matchData.whitePlayerId,
-      blackPlayerId: matchData.blackPlayerId,
+      whiteTimeMs: matchData?.whiteTimeMs || 600000,
+      blackTimeMs: matchData?.blackTimeMs || 600000,
+      lastMoveAt: matchData?.lastMoveAt || Date.now(),
+      incrementMs: matchData?.incrementMs || 0,
+      turn: matchData?.turn || 'w',
+      whitePlayerName: matchData?.whitePlayerName || 'White',
+      blackPlayerName: matchData?.blackPlayerName || 'Black',
+      whitePlayerId: matchData?.whitePlayerId || '',
+      blackPlayerId: matchData?.blackPlayerId || '',
       selectedSquare: null,
       validMoves: [],
-      showBoard: true,
     });
   },
 
@@ -137,7 +136,6 @@ export const useChessStore = create<ChessState>((set, get) => ({
       blackPlayerId: matchData.blackPlayerId,
       selectedSquare: null,
       validMoves: [],
-      showBoard: true,
     });
   },
 

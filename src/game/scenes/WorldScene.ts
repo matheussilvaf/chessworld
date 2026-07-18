@@ -1181,6 +1181,18 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  public activateOverlayInteraction(tableId: string) {
+    if (this.chessOverlay) {
+      this.chessOverlay.setActiveTable(tableId);
+    }
+  }
+
+  public deactivateOverlayInteraction() {
+    if (this.chessOverlay) {
+      this.chessOverlay.clearActiveTable();
+    }
+  }
+
   public movePlayerToBoard(arenaId: string, side: 'left' | 'right') {
     const arena = this.arenas.find(a => a.id === arenaId || a.title === arenaId);
     if (!arena || !this.player) return;
