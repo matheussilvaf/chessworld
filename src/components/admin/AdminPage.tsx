@@ -1,14 +1,15 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Settings, Gauge, ZoomIn, ArrowLeft, Crosshair } from 'lucide-react';
+import { Settings, Gauge, ZoomIn, ArrowLeft, Crosshair, Bug } from 'lucide-react';
 
 interface GameSettings {
   default_zoom: number;
   player_speed: number;
+  show_debug_visuals: boolean;
 }
 
 export function AdminPage() {
-  const [settings, setSettings] = useState<GameSettings>({ default_zoom: 2, player_speed: 3 });
+  const [settings, setSettings] = useState<GameSettings>({ default_zoom: 2, player_speed: 3, show_debug_visuals: false });
   const [saving, setSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
 
@@ -19,11 +20,15 @@ export function AdminPage() {
   const loadSettings = async () => {
     const { data } = await supabase
       .from('game_settings')
-      .select('default_zoom, player_speed')
+      .select('default_zoom, player_speed, show_debug_visuals')
       .eq('id', 1)
       .maybeSingle();
     if (data) {
-      setSettings({ default_zoom: Number(data.default_zoom), player_speed: Number(data.player_speed) });
+      setSettings({
+        default_zoom: Number(data.default_zoom),
+        player_speed: Number(data.player_speed),
+        show_debug_visuals: Boolean(data.show_debug_visuals),
+      });
     }
   };
 
@@ -34,6 +39,7 @@ export function AdminPage() {
       .update({
         default_zoom: newSettings.default_zoom,
         player_speed: newSettings.player_speed,
+        show_debug_visuals: newSettings.show_debug_visuals,
         updated_at: new Date().toISOString(),
       })
       .eq('id', 1);
@@ -206,6 +212,37 @@ export function AdminPage() {
                   {s}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Debug Visuals Toggle */}
+          <div className="bg-slate-900 rounded-xl border border-slate-800 p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-cyan-500/10 flex items-center justify-center">
+                  <Bug className="w-4 h-4 text-cyan-400" />
+                </div>
+                <div>
+                  <h2 className="text-base font-medium text-white">Debug Visuals</h2>
+                  <p className="text-sm text-slate-400">Show collision body, sprite origin, and path overlays</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  const next = { ...settings, show_debug_visuals: !settings.show_debug_visuals };
+                  setSettings(next);
+                  saveSettings(next);
+                }}
+                className={`relative w-12 h-6 rounded-full transition-colors ${
+                  settings.show_debug_visuals ? 'bg-cyan-500' : 'bg-slate-700'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                    settings.show_debug_visuals ? 'translate-x-6' : 'translate-x-0'
+                  }`}
+                />
+              </button>
             </div>
           </div>
         </div>

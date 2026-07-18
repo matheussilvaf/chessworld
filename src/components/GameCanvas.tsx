@@ -104,6 +104,7 @@ export function GameCanvas() {
       if (scene) {
         scene.setDefaultZoom(state.defaultZoom);
         scene.setPlayerSpeed(state.playerSpeed);
+        scene.setShowDebugVisuals(state.showDebugVisuals);
       }
     });
 

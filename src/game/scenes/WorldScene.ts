@@ -66,6 +66,7 @@ export class WorldScene extends Phaser.Scene {
   private movementSender: MovementSender | null = null;
   private currentDirection: Direction8 = 'down';
   private playerSpeed = MAP_CONFIG.playerSpeed;
+  private showDebugVisuals = false;
   private playerFeetOffset = 0;
   private playerFeetOffsetX = 0;
   private pathfinder!: AStarGrid;
@@ -309,6 +310,7 @@ export class WorldScene extends Phaser.Scene {
 
   private drawDebug() {
     this.debugGfx.clear();
+    if (!this.showDebugVisuals) return;
     const bx = this.playerBody.position.x;
     const by = this.playerBody.position.y;
     const bodyConfig = getBodyConfig();
@@ -1219,5 +1221,10 @@ export class WorldScene extends Phaser.Scene {
 
   public setPlayerSpeed(speed: number) {
     this.playerSpeed = speed;
+  }
+
+  public setShowDebugVisuals(show: boolean) {
+    this.showDebugVisuals = show;
+    if (!show) this.debugGfx.clear();
   }
 }
