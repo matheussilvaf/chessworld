@@ -798,9 +798,10 @@ export class WorldScene extends Phaser.Scene {
     this.player.setDepth(100);
 
     // Collision body at the character's feet using a circle for smooth sliding.
-    // A circle prevents corner-cutting and can't squeeze through diagonal gaps.
+    // feetY is the pixel row within the frame where feet touch the ground.
+    // Body center = feetY - radius, relative to sprite origin.
     const bodyRadius = 10;
-    const feetOffsetY = Math.round((1 - charDef.originY) * charDef.frameHeight - bodyRadius);
+    const feetOffsetY = Math.round(charDef.feetY - charDef.originY * charDef.frameHeight - bodyRadius);
 
     this.playerBody = this.matter.add.circle(
       x, y + feetOffsetY,

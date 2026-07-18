@@ -24,6 +24,7 @@ export interface CharacterDef {
   bodyOffsetY: number;
   originX: number;
   originY: number;
+  feetY: number;
 }
 
 const DIRECTION_ORDER: Direction8[] = [
@@ -53,7 +54,8 @@ export const CHARACTERS: Record<string, CharacterDef> = {
     bodyOffsetX: 0,
     bodyOffsetY: 0,
     originX: 0.5,
-    originY: 0.769,
+    originY: 0.5,
+    feetY: 83,
   },
 };
 
