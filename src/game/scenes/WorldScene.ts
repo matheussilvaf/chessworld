@@ -61,6 +61,7 @@ export class WorldScene extends Phaser.Scene {
   private movementSender: MovementSender | null = null;
   private currentDirection: Direction8 = 'down';
   private playerSpeed = MAP_CONFIG.playerSpeed;
+  private playerFeetOffset = 0;
   private pathfinder!: AStarGrid;
   private collisionRects: { x: number; y: number; width: number; height: number }[] = [];
   private collisionPolys: { x: number; y: number }[][] = [];
@@ -131,6 +132,13 @@ export class WorldScene extends Phaser.Scene {
     // Build visibility map from raw TMJ data to skip hidden layers/groups
     const hiddenLayerIndices = this.getHiddenTileLayerIndices();
 
+    // Build set of above_player layer names from raw TMJ (by class or path)
+    const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
+    const abovePlayerNames = new Set<string>();
+    if (tmjData) {
+      this.collectAbovePlayerLayers(tmjData.layers, false, abovePlayerNames);
+    }
+
     // Create ALL tile layers by index to handle duplicate names
     for (let i = 0; i < map.layers.length; i++) {
       const layerData = map.layers[i];
@@ -148,9 +156,8 @@ export class WorldScene extends Phaser.Scene {
 
       const layer = map.createLayer(i, tilesets);
       if (layer) {
-        const isAbove = lowerName.includes('visual_above/') || lowerName.includes('(above)');
+        const isAbove = abovePlayerNames.has(lowerName);
         layer.setDepth(isAbove ? 200 : 0);
-        // Prevent tile bleeding at viewport edges during camera movement
         layer.setCullPadding(2, 2);
       }
     }
@@ -259,9 +266,10 @@ export class WorldScene extends Phaser.Scene {
   private lateUpdate() {
     if (!this.player || !this.playerBody) return;
 
-    // Read final physics position → snap to integer world pixels
+    // Read final physics position -> snap to integer world pixels
+    // Body is offset down by playerFeetOffset; sprite origin is at the "torso" level
     this.player.x = Math.floor(this.playerBody.position.x);
-    this.player.y = Math.floor(this.playerBody.position.y);
+    this.player.y = Math.floor(this.playerBody.position.y - this.playerFeetOffset);
 
     // Update camera target from final player position
     if (this.cameraFollowing) {
@@ -343,9 +351,11 @@ export class WorldScene extends Phaser.Scene {
     const processLayers = (layers: any[], isAbove: boolean) => {
       for (const layerData of layers) {
         const lowerName = layerData.name.toLowerCase();
+        const cls = (layerData.class || '').toLowerCase();
+        const layerAbove = isAbove || cls === 'above_player' || lowerName.includes('(above)');
 
         if (layerData.type === 'group') {
-          const nowAbove = isAbove || lowerName === 'visual_above';
+          const nowAbove = layerAbove || lowerName === 'visual_above';
           processLayers(layerData.layers || [], nowAbove);
           continue;
         }
@@ -363,7 +373,7 @@ export class WorldScene extends Phaser.Scene {
           const sprite = this.add.sprite(obj.x, obj.y, tsDef.textureKey);
           sprite.setOrigin(0, 1); // Tiled tile objects have origin at bottom-left
           sprite.setDisplaySize(obj.width || 32, obj.height || 32);
-          sprite.setDepth(isAbove ? 200 : (obj.y || 0));
+          sprite.setDepth(layerAbove ? 200 : (obj.y || 0));
 
           // Handle flip flags encoded in GID
           const FLIPPED_H = 0x80000000;
@@ -417,6 +427,32 @@ export class WorldScene extends Phaser.Scene {
     return hidden;
   }
 
+  /**
+   * Recursively collects layer names (lowercased, with group path prefix) that should
+   * render above the player. Detection criteria:
+   * 1. Layer has class="above_player" in the TMJ
+   * 2. Layer is inside a group named "visual_above" (or similar)
+   * 3. Layer name contains "(above)"
+   */
+  private collectAbovePlayerLayers(layers: any[], parentAbove: boolean, result: Set<string>, prefix = '') {
+    for (const l of layers) {
+      const name = l.name || '';
+      const fullName = prefix ? `${prefix}/${name}` : name;
+      const lowerFull = fullName.toLowerCase();
+      const cls = (l.class || '').toLowerCase();
+      const isAbove = parentAbove || cls === 'above_player' || lowerFull.includes('(above)');
+
+      if (l.type === 'group') {
+        const groupAbove = isAbove || name.toLowerCase() === 'visual_above';
+        this.collectAbovePlayerLayers(l.layers || [], groupAbove, result, fullName);
+      } else if (l.type === 'tilelayer') {
+        if (isAbove) {
+          result.add(lowerFull);
+        }
+      }
+    }
+  }
+
   private setupCollisionsFromTMJ() {
     const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
     if (!tmjData) return;
@@ -433,15 +469,21 @@ export class WorldScene extends Phaser.Scene {
       const label = obj.name || `collision_${obj.id}`;
 
       if (obj.polygon) {
+        // Tiled polygon vertices are relative to (obj.x, obj.y)
         const absoluteVerts = obj.polygon.map((p: { x: number; y: number }) => ({
           x: obj.x + p.x,
           y: obj.y + p.y,
         }));
         this.collisionPolys.push(absoluteVerts);
-        this.createPolygonBodies(absoluteVerts, labelData, label);
+        this.createPolygonCollision(absoluteVerts, label);
       } else if (obj.width && obj.height) {
         this.collisionRects.push({ x: obj.x, y: obj.y, width: obj.width, height: obj.height });
-        this.createRectBody(obj, labelData, label);
+        const cx = obj.x + obj.width / 2;
+        const cy = obj.y + obj.height / 2;
+        this.matter.add.rectangle(cx, cy, obj.width, obj.height, {
+          isStatic: true,
+          label,
+        });
       }
     }
   }
@@ -458,131 +500,107 @@ export class WorldScene extends Phaser.Scene {
     return null;
   }
 
-  private createRectBody(obj: any, labelData: Record<string, string>, label: string) {
-    const cx = obj.x + obj.width / 2;
-    const cy = obj.y + obj.height / 2;
-    this.matter.add.rectangle(cx, cy, obj.width, obj.height, {
-      isStatic: true,
-      label,
-      // @ts-ignore
-      customData: labelData,
-    });
-  }
-
-  private createPolygonBodies(absoluteVerts: { x: number; y: number }[], labelData: Record<string, string>, label: string) {
+  private createPolygonCollision(absoluteVerts: { x: number; y: number }[], label: string) {
     if (absoluteVerts.length < 3) return;
 
-    // Convert to poly-decomp format [x, y][]
+    // Compute the bounding box center to pass as the initial position
+    const xs = absoluteVerts.map(v => v.x);
+    const ys = absoluteVerts.map(v => v.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const bboxCx = (minX + maxX) / 2;
+    const bboxCy = (minY + maxY) / 2;
+
+    // Convert to poly-decomp format and decompose into convex parts
     const poly = absoluteVerts.map(v => [v.x, v.y] as [number, number]);
 
     try {
       decomp.makeCCW(poly);
       decomp.removeCollinearPoints(poly, 0.01);
       if (poly.length < 3) {
-        this.createConvexBody(absoluteVerts, labelData, label);
+        this.createSingleConvexBody(absoluteVerts, bboxCx, bboxCy, label);
         return;
       }
 
       const convexParts = decomp.quickDecomp(poly);
       if (!convexParts || convexParts.length === 0) {
-        this.createConvexBody(absoluteVerts, labelData, label);
+        this.createSingleConvexBody(absoluteVerts, bboxCx, bboxCy, label);
         return;
       }
 
       for (let i = 0; i < convexParts.length; i++) {
         const part = convexParts[i];
         if (part.length < 3) continue;
-
         const partVerts = part.map((p: number[]) => ({ x: p[0], y: p[1] }));
-        this.createConvexBody(partVerts, labelData, `${label}_p${i}`);
+        const partXs = partVerts.map((v: {x: number; y: number}) => v.x);
+        const partYs = partVerts.map((v: {x: number; y: number}) => v.y);
+        const partCx = (Math.min(...partXs) + Math.max(...partXs)) / 2;
+        const partCy = (Math.min(...partYs) + Math.max(...partYs)) / 2;
+        this.createSingleConvexBody(partVerts, partCx, partCy, `${label}_p${i}`);
       }
-    } catch (e) {
-      this.createConvexBody(absoluteVerts, labelData, label);
+    } catch {
+      this.createSingleConvexBody(absoluteVerts, bboxCx, bboxCy, label);
     }
   }
 
-  private createConvexBody(verts: { x: number; y: number }[], labelData: Record<string, string>, label: string) {
+  /**
+   * Creates a single convex static body from absolute-world vertices.
+   * 
+   * Matter.fromVertices internally recenters the shape around its center of mass,
+   * which shifts the body away from where we want it. We correct by measuring
+   * the offset between where Matter placed the body's bounds and where the
+   * original vertices' bounds should be.
+   */
+  private createSingleConvexBody(
+    verts: { x: number; y: number }[],
+    desiredCx: number,
+    desiredCy: number,
+    label: string
+  ) {
     if (verts.length < 3) return;
 
-    // Compute proper centroid using signed area for accurate polygon center
-    let signedArea = 0;
-    let cx = 0;
-    let cy = 0;
-    const n = verts.length;
-    for (let i = 0; i < n; i++) {
-      const v0 = verts[i];
-      const v1 = verts[(i + 1) % n];
-      const cross = v0.x * v1.y - v1.x * v0.y;
-      signedArea += cross;
-      cx += (v0.x + v1.x) * cross;
-      cy += (v0.y + v1.y) * cross;
-    }
-    signedArea *= 0.5;
+    // Make vertices relative to the desired center (Matter expects this)
+    const relVerts = verts.map(v => ({ x: v.x - desiredCx, y: v.y - desiredCy }));
 
-    if (Math.abs(signedArea) < 0.001) {
-      // Degenerate polygon - use average as fallback
-      cx = 0; cy = 0;
-      for (const v of verts) { cx += v.x; cy += v.y; }
-      cx /= n; cy /= n;
-    } else {
-      cx /= (6 * signedArea);
-      cy /= (6 * signedArea);
-    }
-
-    // Make vertices relative to centroid
-    const relVerts = verts.map(v => ({ x: v.x - cx, y: v.y - cy }));
-
-    const body = this.matter.add.fromVertices(cx, cy, [relVerts], {
+    const body = this.matter.add.fromVertices(desiredCx, desiredCy, [relVerts], {
       isStatic: true,
       label,
-      // @ts-ignore
-      customData: labelData,
     });
 
     if (body) {
-      // Matter.js fromVertices may shift the body due to center-of-mass calculation.
-      // Correct by comparing where Matter placed the body vs where we need it.
-      // Use the body's actual vertex positions to compute the offset.
-      const bodyVerts = body.vertices;
-      if (bodyVerts && bodyVerts.length > 0) {
-        // Find actual centroid of body vertices
-        let actualCx = 0, actualCy = 0;
-        for (const v of bodyVerts) { actualCx += v.x; actualCy += v.y; }
-        actualCx /= bodyVerts.length;
-        actualCy /= bodyVerts.length;
+      // Matter.fromVertices shifts the body to its computed center of mass.
+      // Correct: compare the body's actual bounding box to the intended one.
+      const bodyBounds = body.bounds;
+      const actualCx = (bodyBounds.min.x + bodyBounds.max.x) / 2;
+      const actualCy = (bodyBounds.min.y + bodyBounds.max.y) / 2;
 
-        // Find expected centroid from our absolute verts
-        let expectedCx = 0, expectedCy = 0;
-        for (const v of verts) { expectedCx += v.x; expectedCy += v.y; }
-        expectedCx /= verts.length;
-        expectedCy /= verts.length;
+      // Our intended bounding box center
+      const intendedMinX = Math.min(...verts.map(v => v.x));
+      const intendedMaxX = Math.max(...verts.map(v => v.x));
+      const intendedMinY = Math.min(...verts.map(v => v.y));
+      const intendedMaxY = Math.max(...verts.map(v => v.y));
+      const intendedCx = (intendedMinX + intendedMaxX) / 2;
+      const intendedCy = (intendedMinY + intendedMaxY) / 2;
 
-        const offsetX = expectedCx - actualCx;
-        const offsetY = expectedCy - actualCy;
+      const dx = intendedCx - actualCx;
+      const dy = intendedCy - actualCy;
 
-        if (Math.abs(offsetX) > 1 || Math.abs(offsetY) > 1) {
-          this.matter.body.setPosition(body, {
-            x: body.position.x + offsetX,
-            y: body.position.y + offsetY,
-          });
-        }
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+        this.matter.body.setPosition(body, {
+          x: body.position.x + dx,
+          y: body.position.y + dy,
+        });
       }
     } else {
-      // Fallback: create AABB rectangle if fromVertices fails
-      const xs = verts.map(v => v.x);
-      const ys = verts.map(v => v.y);
-      const minX = Math.min(...xs);
-      const maxX = Math.max(...xs);
-      const minY = Math.min(...ys);
-      const maxY = Math.max(...ys);
-      const w = maxX - minX;
-      const h = maxY - minY;
-      if (w > 1 && h > 1) {
-        this.matter.add.rectangle(minX + w / 2, minY + h / 2, w, h, {
+      // fromVertices failed (degenerate shape) — fallback to AABB rectangle
+      const bboxW = Math.max(...verts.map(v => v.x)) - Math.min(...verts.map(v => v.x));
+      const bboxH = Math.max(...verts.map(v => v.y)) - Math.min(...verts.map(v => v.y));
+      if (bboxW > 1 && bboxH > 1) {
+        this.matter.add.rectangle(desiredCx, desiredCy, bboxW, bboxH, {
           isStatic: true,
           label: label + '_bbox',
-          // @ts-ignore
-          customData: labelData,
         });
       }
     }
@@ -694,12 +712,15 @@ export class WorldScene extends Phaser.Scene {
     this.player.setOrigin(charDef.originX, charDef.originY);
     this.player.setDepth(100);
 
-    // Collision body matches the visible character's feet area at scale 1.0
+    // Collision body at the character's feet.
+    // Sprite originY=0.769 on 104px frame means feet are 24px below origin.
+    // We offset the body downward so its center aligns with the feet area.
     const bodyW = 24;
     const bodyH = 12;
+    const feetOffsetY = Math.round((1 - charDef.originY) * charDef.frameHeight - bodyH / 2);
 
     this.playerBody = this.matter.add.rectangle(
-      x, y,
+      x, y + feetOffsetY,
       bodyW, bodyH,
       {
         label: 'player',
@@ -711,6 +732,7 @@ export class WorldScene extends Phaser.Scene {
       }
     );
     this.matter.body.setInertia(this.playerBody, Infinity);
+    this.playerFeetOffset = feetOffsetY;
   }
 
   private createAnimations() {
@@ -847,11 +869,14 @@ export class WorldScene extends Phaser.Scene {
 
   private emitMovement(isMoving: boolean, direction: Direction8 = this.currentDirection) {
     if (!this.movementSender) return;
+    // Send sprite position (origin point), not raw body position, for remote rendering consistency
+    const spriteX = this.playerBody.position.x;
+    const spriteY = this.playerBody.position.y - this.playerFeetOffset;
     this.movementSender({
-      x: this.playerBody.position.x,
-      y: this.playerBody.position.y,
-      targetX: this.target?.x ?? this.playerBody.position.x,
-      targetY: this.target?.y ?? this.playerBody.position.y,
+      x: spriteX,
+      y: spriteY,
+      targetX: this.target?.x ? this.target.x : spriteX,
+      targetY: this.target?.y ? this.target.y - this.playerFeetOffset : spriteY,
       direction,
       isMoving,
     });
