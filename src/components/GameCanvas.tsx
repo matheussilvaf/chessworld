@@ -361,7 +361,7 @@ export function GameCanvas() {
           // Show initial position and activate interactive overlay
           const initialFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
           worldScene.updateBoardFEN(data.boardId, initialFen);
-          worldScene.activateOverlayInteraction(data.boardId);
+          worldScene.activateOverlayInteraction(data.boardId, data.color);
         }
       }
     });

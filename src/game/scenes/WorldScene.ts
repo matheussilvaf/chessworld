@@ -91,6 +91,9 @@ export class WorldScene extends Phaser.Scene {
   private pinchStartDistance = 0;
   private pinchStartZoom = 0;
   private isPinching = false;
+  private targetRotation = 0;
+  private currentCameraRotation = 0;
+  private inMatch = false;
 
   // Pixel-perfect camera state (manual follow, PPU-snapped)
   private cameraTargetX = 0;
@@ -238,6 +241,7 @@ export class WorldScene extends Phaser.Scene {
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       // Don't walk if pointer is over an interactive object (handled by InteractionSystem)
       if (this.interactionSystem?.hitTestPointer(worldPoint.x, worldPoint.y)) return;
+      if (this.inMatch) return;
       this.navigateTo(worldPoint.x, worldPoint.y);
     });
 
@@ -405,7 +409,7 @@ export class WorldScene extends Phaser.Scene {
 
     // Desktop: mouse wheel / trackpad scroll zoom
     this.input.on('wheel', (_pointer: Phaser.Input.Pointer, _gameObjects: any[], _deltaX: number, deltaY: number) => {
-      if (this.movementLocked) return;
+      if (this.movementLocked && !this.inMatch) return;
       const direction = deltaY > 0 ? -1 : 1;
       this.targetZoom = Phaser.Math.Clamp(
         this.targetZoom + direction * step,
@@ -819,9 +823,11 @@ export class WorldScene extends Phaser.Scene {
     );
 
     this.interactionSystem.onInteractionClick = (event) => {
+      if (this.inMatch) return;
       this.onInteractionClick?.(event);
     };
     this.interactionSystem.onProximityEnter = (event) => {
+      if (this.inMatch) return;
       this.onProximityEnter?.(event);
     };
     this.interactionSystem.onProximityExit = (obj) => {
@@ -913,6 +919,16 @@ export class WorldScene extends Phaser.Scene {
       this.cameras.main.setZoom(newZoom);
     } else if (currentZoom !== this.targetZoom) {
       this.cameras.main.setZoom(this.targetZoom);
+    }
+
+    // Smooth rotation interpolation (for black player 180° flip)
+    const currentRot = this.currentCameraRotation;
+    if (Math.abs(currentRot - this.targetRotation) > 0.005) {
+      this.currentCameraRotation = Phaser.Math.Linear(currentRot, this.targetRotation, 0.04);
+      this.cameras.main.setRotation(this.currentCameraRotation);
+    } else if (currentRot !== this.targetRotation) {
+      this.currentCameraRotation = this.targetRotation;
+      this.cameras.main.setRotation(this.currentCameraRotation);
     }
 
     // Player visual position and camera are updated in lateUpdate (postupdate)
@@ -1181,16 +1197,26 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  public activateOverlayInteraction(tableId: string) {
+  public activateOverlayInteraction(tableId: string, playerColor?: 'w' | 'b') {
+    this.inMatch = true;
     if (this.chessOverlay) {
       this.chessOverlay.setActiveTable(tableId);
+    }
+    // Rotate 180° for black player so they see from their perspective
+    if (playerColor === 'b') {
+      this.targetRotation = Math.PI;
     }
   }
 
   public deactivateOverlayInteraction() {
+    this.inMatch = false;
     if (this.chessOverlay) {
       this.chessOverlay.clearActiveTable();
     }
+    // Smoothly rotate back to normal
+    this.targetRotation = 0;
+    // Reset zoom to default
+    this.targetZoom = MAP_CONFIG.zoom.default;
   }
 
   public movePlayerToBoard(arenaId: string, side: 'left' | 'right') {
