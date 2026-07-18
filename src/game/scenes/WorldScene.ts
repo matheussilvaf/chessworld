@@ -103,6 +103,9 @@ export class WorldScene extends Phaser.Scene {
 
     const logicalSet = new Set(MAP_CONFIG.logicalLayers.map(l => l.toLowerCase()));
 
+    // Build visibility map from raw TMJ data to skip hidden layers/groups
+    const hiddenLayerIndices = this.getHiddenTileLayerIndices();
+
     // Create ALL tile layers by index to handle duplicate names
     for (let i = 0; i < map.layers.length; i++) {
       const layerData = map.layers[i];
@@ -111,6 +114,9 @@ export class WorldScene extends Phaser.Scene {
       // Skip logical layers (check both full name and last segment)
       const shortName = lowerName.split('/').pop() || lowerName;
       if (logicalSet.has(lowerName) || logicalSet.has(shortName)) continue;
+
+      // Skip hidden layers (marked visible:false in Tiled or inside hidden groups)
+      if (hiddenLayerIndices.has(i)) continue;
 
       // Skip if already created
       if (layerData.tilemapLayer) continue;
@@ -128,8 +134,8 @@ export class WorldScene extends Phaser.Scene {
     // Set up Matter world bounds
     this.matter.world.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
 
-    // Load collisions
-    this.setupCollisions(map);
+    // Load collisions from raw TMJ (handles nested groups correctly)
+    this.setupCollisionsFromTMJ();
 
     // Setup chess table interactives
     this.setupInteractives(map);
@@ -266,24 +272,64 @@ export class WorldScene extends Phaser.Scene {
     return { x: 1273, y: 926 };
   }
 
-  private setupCollisions(map: Phaser.Tilemaps.Tilemap) {
-    const collisionLayer = map.objects.find(l => l.name.toLowerCase() === 'collisions');
-    if (!collisionLayer) return;
+  private getHiddenTileLayerIndices(): Set<number> {
+    const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
+    if (!tmjData) return new Set();
 
-    for (const obj of collisionLayer.objects) {
-      const props: any[] = (obj as any).properties || [];
+    const hidden = new Set<number>();
+    let idx = 0;
+
+    const walk = (layers: any[], parentVisible: boolean) => {
+      for (const l of layers) {
+        const selfVisible = l.visible !== false;
+        const effectivelyVisible = parentVisible && selfVisible;
+
+        if (l.type === 'group') {
+          walk(l.layers || [], effectivelyVisible);
+        } else if (l.type === 'tilelayer') {
+          if (!effectivelyVisible) hidden.add(idx);
+          idx++;
+        }
+      }
+    };
+
+    walk(tmjData.layers || [], true);
+    return hidden;
+  }
+
+  private setupCollisionsFromTMJ() {
+    const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
+    if (!tmjData) return;
+
+    const collisionObjects = this.findObjectLayerInTMJ(tmjData.layers, 'collisions');
+    if (!collisionObjects) return;
+
+    for (const obj of collisionObjects) {
+      const props: any[] = obj.properties || [];
       const labelData: Record<string, string> = {};
       for (const p of props) {
         labelData[p.name] = String(p.value);
       }
       const label = obj.name || `collision_${obj.id}`;
 
-      if ((obj as any).polygon) {
+      if (obj.polygon) {
         this.createPolygonBody(obj, labelData, label);
       } else if (obj.width && obj.height) {
         this.createRectBody(obj, labelData, label);
       }
     }
+  }
+
+  private findObjectLayerInTMJ(layers: any[], name: string): any[] | null {
+    for (const l of layers) {
+      if (l.type === 'group') {
+        const found = this.findObjectLayerInTMJ(l.layers || [], name);
+        if (found) return found;
+      } else if (l.type === 'objectgroup' && l.name.toLowerCase() === name.toLowerCase()) {
+        return l.objects || [];
+      }
+    }
+    return null;
   }
 
   private createRectBody(obj: any, labelData: Record<string, string>, label: string) {
@@ -301,45 +347,48 @@ export class WorldScene extends Phaser.Scene {
     const polygon: { x: number; y: number }[] = obj.polygon;
     if (!polygon || polygon.length < 3) return;
 
-    const vertices = polygon.map((p: { x: number; y: number }) => ({
-      x: p.x,
-      y: p.y,
+    // Convert relative vertices to absolute world coordinates
+    const absoluteVerts = polygon.map((p: { x: number; y: number }) => ({
+      x: obj.x + p.x,
+      y: obj.y + p.y,
     }));
 
-    const cx = obj.x + vertices.reduce((s: number, v: { x: number }) => s + v.x, 0) / vertices.length;
-    const cy = obj.y + vertices.reduce((s: number, v: { y: number }) => s + v.y, 0) / vertices.length;
-
-    const centeredVerts = vertices.map((v: { x: number; y: number }) => ({
-      x: v.x - (cx - obj.x),
-      y: v.y - (cy - obj.y),
-    }));
+    // Calculate the centroid in world space
+    const cx = absoluteVerts.reduce((s: number, v: { x: number }) => s + v.x, 0) / absoluteVerts.length;
+    const cy = absoluteVerts.reduce((s: number, v: { y: number }) => s + v.y, 0) / absoluteVerts.length;
 
     try {
-      const body = this.matter.add.fromVertices(cx, cy, [centeredVerts], {
+      const body = this.matter.add.fromVertices(cx, cy, [absoluteVerts], {
         isStatic: true,
         label,
         // @ts-ignore
         customData: labelData,
       });
+
       if (!body) {
-        const minX = Math.min(...vertices.map((v: { x: number }) => v.x));
-        const maxX = Math.max(...vertices.map((v: { x: number }) => v.x));
-        const minY = Math.min(...vertices.map((v: { y: number }) => v.y));
-        const maxY = Math.max(...vertices.map((v: { y: number }) => v.y));
-        const w = maxX - minX;
-        const h = maxY - minY;
-        const bcx = obj.x + minX + w / 2;
-        const bcy = obj.y + minY + h / 2;
-        this.matter.add.rectangle(bcx, bcy, w, h, {
-          isStatic: true,
-          label: label + '_bbox',
-          // @ts-ignore
-          customData: labelData,
-        });
+        this.createBBoxFallback(absoluteVerts, label, labelData);
       }
     } catch (e) {
-      console.warn(`[Collision] Failed polygon "${label}":`, e);
+      this.createBBoxFallback(absoluteVerts, label, labelData);
     }
+  }
+
+  private createBBoxFallback(verts: { x: number; y: number }[], label: string, labelData: Record<string, string>) {
+    const xs = verts.map(v => v.x);
+    const ys = verts.map(v => v.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const w = maxX - minX;
+    const h = maxY - minY;
+    if (w < 1 || h < 1) return;
+    this.matter.add.rectangle(minX + w / 2, minY + h / 2, w, h, {
+      isStatic: true,
+      label: label + '_bbox',
+      // @ts-ignore
+      customData: labelData,
+    });
   }
 
   private setupInteractives(map: Phaser.Tilemaps.Tilemap) {
