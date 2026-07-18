@@ -189,10 +189,15 @@ export class WorldScene extends Phaser.Scene {
     // Build pathfinding grid
     this.buildPathfindingGrid(map.widthInPixels, map.heightInPixels);
 
-    // Click-to-move with pathfinding
-    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+    // Click-to-move: only on pointer RELEASE (not hold), with drag threshold
+    const DRAG_THRESHOLD = 8; // px — if pointer moved more than this, it was a drag, not a tap
+    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
       if (this.movementLocked) return;
       if (this.isPinching) return;
+      const dist = Phaser.Math.Distance.Between(
+        pointer.downX, pointer.downY, pointer.upX, pointer.upY
+      );
+      if (dist > DRAG_THRESHOLD) return;
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       this.navigateTo(worldPoint.x, worldPoint.y);
     });
@@ -1070,5 +1075,16 @@ export class WorldScene extends Phaser.Scene {
     this.movementLocked = false;
     this.targetZoom = this.defaultZoom;
     this.cameraFollowing = true;
+  }
+
+  public setDefaultZoom(zoom: number) {
+    this.defaultZoom = zoom;
+    if (!this.movementLocked) {
+      this.targetZoom = zoom;
+    }
+  }
+
+  public setPlayerSpeed(speed: number) {
+    this.playerSpeed = speed;
   }
 }

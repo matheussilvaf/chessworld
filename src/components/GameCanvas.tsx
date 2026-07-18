@@ -4,6 +4,7 @@ import { createPhaserGame, getWorldScene } from '../game/PhaserGame';
 import { useGameStore } from '../stores/gameStore';
 import { useAuthStore } from '../stores/authStore';
 import { useChessStore } from '../stores/chessStore';
+import { useGameSettingsStore } from '../stores/gameSettingsStore';
 import { getWorldRoom, registerBoards, sendMovement } from '../game/network/colyseusClient';
 import { useColyseusStore } from '../hooks/useColyseusConnection';
 import type { WorldScene } from '../game/scenes/WorldScene';
@@ -85,6 +86,27 @@ export function GameCanvas() {
         gameRef.current.destroy(true);
         gameRef.current = null;
       }
+    };
+  }, []);
+
+  // Load and subscribe to game settings (admin-adjustable zoom/speed)
+  useEffect(() => {
+    const settingsStore = useGameSettingsStore;
+    settingsStore.getState().load();
+    const unsubRealtime = settingsStore.getState().subscribe();
+
+    const unsubStore = settingsStore.subscribe((state) => {
+      if (!gameRef.current) return;
+      const scene = getWorldScene(gameRef.current);
+      if (scene) {
+        scene.setDefaultZoom(state.defaultZoom);
+        scene.setPlayerSpeed(state.playerSpeed);
+      }
+    });
+
+    return () => {
+      unsubRealtime();
+      unsubStore();
     };
   }, []);
 
