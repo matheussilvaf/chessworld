@@ -76,7 +76,7 @@ export class WorldScene extends Phaser.Scene {
   private pinchStartZoom = 0;
   private isPinching = false;
 
-  // Camera state — manual follow replaces startFollow to avoid preRender overwrite
+  // Pixel-perfect camera state (manual follow, PPU-snapped)
   private cameraTargetX = 0;
   private cameraTargetY = 0;
   private cameraBounds = { x: 0, y: 0, w: 0, h: 0 };
@@ -172,13 +172,19 @@ export class WorldScene extends Phaser.Scene {
     this.createPlayer(spawnPoint.x, spawnPoint.y);
     this.createAnimations();
 
-    // Camera — manual follow (no startFollow to avoid preRender sub-pixel overwrite)
+    // Camera — manual pixel-perfect follow
+    // No startFollow: Phaser's preRender would overwrite our snapped scroll with fractional values
     this.cameras.main.setZoom(this.defaultZoom);
     this.cameras.main.setRoundPixels(true);
     this.cameraBounds = { x: 0, y: 0, w: map.widthInPixels, h: map.heightInPixels };
     this.cameraTargetX = this.player.x;
     this.cameraTargetY = this.player.y;
     this.snapCameraToTarget();
+
+    // Register late-update: runs AFTER physics, tweens, and all game object updates.
+    // This is Phaser's equivalent of Unity's LateUpdate — guarantees camera reads
+    // final post-physics positions, preventing 1-frame-lag jitter.
+    this.events.on('postupdate', this.lateUpdate, this);
 
     // Build pathfinding grid
     this.buildPathfindingGrid(map.widthInPixels, map.heightInPixels);
@@ -196,39 +202,77 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * Positions the camera centered on cameraTargetX/Y, snapped to the screen-pixel grid.
-   * 
-   * Phaser coordinate system:
-   *   midPoint = scrollX + width/2  (world-space center)
-   *   screenX = (worldX - midPoint) * zoom + width/2
-   * 
+   * Pixel-perfect camera positioning using PPU (Pixels Per Unit) snapping.
+   *
+   * PPU = camera zoom = number of screen pixels per world pixel.
+   * The texel grid spacing in world units = 1/PPU.
+   *
+   * Phaser's rendering formula:
+   *   screenX = (worldX - midPoint) * zoom + viewportWidth/2
+   * where midPoint = scrollX + viewportWidth/2
+   *
    * For screenX to be integer when worldX is integer:
-   *   midPoint * zoom must be integer → midPoint = round(target * zoom) / zoom
+   *   midPoint * PPU must be integer.
+   * We achieve this by flooring: midPoint = floor(target * PPU) / PPU
    */
   private snapCameraToTarget() {
     const cam = this.cameras.main;
-    const zoom = cam.zoom;
+    const ppu = cam.zoom; // Pixels Per Unit = zoom
     const halfW = cam.width * 0.5;
     const halfH = cam.height * 0.5;
 
-    // Snap camera center to screen-pixel grid
-    let midX = Math.round(this.cameraTargetX * zoom) / zoom;
-    let midY = Math.round(this.cameraTargetY * zoom) / zoom;
+    // Floor to nearest texel boundary (1/PPU world units)
+    // Floor is preferred over round: prevents oscillation when target hovers near a boundary
+    let midX = Math.floor(this.cameraTargetX * ppu) / ppu;
+    let midY = Math.floor(this.cameraTargetY * ppu) / ppu;
 
-    // Clamp so visible area stays within map
+    // Clamp so the visible rect stays within map bounds
     const { w, h } = this.cameraBounds;
-    const halfViewW = halfW / zoom;
-    const halfViewH = halfH / zoom;
-    midX = Phaser.Math.Clamp(midX, halfViewW, Math.max(halfViewW, w - halfViewW));
-    midY = Phaser.Math.Clamp(midY, halfViewH, Math.max(halfViewH, h - halfViewH));
+    const halfViewW = halfW / ppu;
+    const halfViewH = halfH / ppu;
+    const minMidX = halfViewW;
+    const maxMidX = Math.max(halfViewW, w - halfViewW);
+    const minMidY = halfViewH;
+    const maxMidY = Math.max(halfViewH, h - halfViewH);
+    midX = Phaser.Math.Clamp(midX, minMidX, maxMidX);
+    midY = Phaser.Math.Clamp(midY, minMidY, maxMidY);
 
-    // Re-snap after clamping (clamp may have produced fractional value)
-    midX = Math.round(midX * zoom) / zoom;
-    midY = Math.round(midY * zoom) / zoom;
+    // Re-snap after clamping to maintain texel alignment
+    midX = Math.floor(midX * ppu) / ppu;
+    midY = Math.floor(midY * ppu) / ppu;
 
-    // Phaser convention: scrollX = midPoint - width/2
+    // Set scroll (Phaser convention: midPoint = scrollX + halfViewport)
     cam.scrollX = midX - halfW;
     cam.scrollY = midY - halfH;
+  }
+
+  /**
+   * Late-update: runs after physics, tweens, and scene.update().
+   * Reads final post-physics body positions and snaps the camera.
+   * This prevents 1-frame lag between physics step and camera positioning.
+   */
+  private lateUpdate() {
+    if (!this.player || !this.playerBody) return;
+
+    // Read final physics position → snap to integer world pixels
+    this.player.x = Math.floor(this.playerBody.position.x);
+    this.player.y = Math.floor(this.playerBody.position.y);
+
+    // Update camera target from final player position
+    if (this.cameraFollowing) {
+      this.cameraTargetX = this.player.x;
+      this.cameraTargetY = this.player.y;
+    }
+
+    // Final pixel-perfect camera snap (last thing before render)
+    this.snapCameraToTarget();
+
+    // Snap remote players to integer positions too
+    this.otherPlayers.forEach((remote) => {
+      const pos = remote.interpolator.getPosition();
+      remote.container.x = Math.floor(pos.x);
+      remote.container.y = Math.floor(pos.y);
+    });
   }
 
   private setupZoom() {
@@ -691,21 +735,10 @@ export class WorldScene extends Phaser.Scene {
       this.cameras.main.setZoom(this.targetZoom);
     }
 
-    // Update player visual position (integer world pixels)
-    this.player.x = Math.round(this.playerBody.position.x);
-    this.player.y = Math.round(this.playerBody.position.y);
-
-    // Manual camera follow with pixel-snapping
-    if (this.cameraFollowing) {
-      this.cameraTargetX = this.player.x;
-      this.cameraTargetY = this.player.y;
-    }
-    this.snapCameraToTarget();
+    // Player visual position and camera are updated in lateUpdate (postupdate)
+    // to guarantee they read the FINAL physics position for this frame.
 
     this.otherPlayers.forEach((remote) => {
-      const pos = remote.interpolator.getPosition();
-      remote.container.x = Math.round(pos.x);
-      remote.container.y = Math.round(pos.y);
       if (remote.isMoving) {
         remote.sprite.anims.play(getAnimKey(remote.direction), true);
       } else {

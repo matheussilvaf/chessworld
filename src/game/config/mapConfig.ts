@@ -17,6 +17,8 @@ export const MAP_CONFIG = {
     'chess_tables_interactions',
   ],
   zoom: {
+    // PPU (Pixels Per Unit) = zoom. At zoom 2, each world pixel = 2 screen pixels.
+    // All steps produce integer tile sizes: tileSize * step = 32 * 0.25 = 8 (integer).
     default: 2,
     min: 0.5,
     max: 4,
