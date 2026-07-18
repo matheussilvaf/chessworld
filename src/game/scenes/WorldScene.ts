@@ -1351,7 +1351,7 @@ export class WorldScene extends Phaser.Scene {
 
   public setShowDebugVisuals(show: boolean) {
     this.showDebugVisuals = show;
-    if (!show) this.debugGfx.clear();
+    if (!show && this.debugGfx) this.debugGfx.clear();
   }
 
   public confirmProximityInteraction() {

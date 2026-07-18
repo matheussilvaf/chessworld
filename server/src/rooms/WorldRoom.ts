@@ -525,6 +525,9 @@ export class WorldRoom extends Room<WorldState> {
     activeGames.set(matchId, chess);
     this.state.matches.set(matchId, match);
 
+    // Save challenger info before clearing
+    const challengerId = board.waitingPlayerId;
+
     board.status = 'playing';
     board.whitePlayerId = whiteId;
     board.blackPlayerId = blackId;
@@ -535,9 +538,9 @@ export class WorldRoom extends Room<WorldState> {
     joiningPlayer.currentBoardId = board.id;
 
     // Send match_started to both players with correct color
-    const challengerSessionId = this.findSessionByPlayerId(board.waitingPlayerId);
-    const challengerColor2 = board.waitingPlayerId === whiteId ? 'w' : 'b';
-    const joinerColor = board.waitingPlayerId === whiteId ? 'b' : 'w';
+    const challengerSessionId = this.findSessionByPlayerId(challengerId);
+    const challengerColor2 = challengerId === whiteId ? 'w' : 'b';
+    const joinerColor = challengerId === whiteId ? 'b' : 'w';
 
     if (challengerSessionId) {
       const challengerClient = this.clients.find(c => c.sessionId === challengerSessionId);
