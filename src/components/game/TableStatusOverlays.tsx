@@ -1,5 +1,5 @@
 import { useGameStore } from '../../stores/gameStore';
-import { Clock, Swords, Users, Crown } from 'lucide-react';
+import { Clock, Swords } from 'lucide-react';
 
 export function TableStatusOverlays() {
   const { colyseusBoards } = useGameStore();

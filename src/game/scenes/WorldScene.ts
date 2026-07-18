@@ -183,7 +183,7 @@ export class WorldScene extends Phaser.Scene {
       if (layer) {
         const isAbove = abovePlayerNames.has(lowerName);
         layer.setDepth(isAbove ? 200 : 0);
-        layer.setCullPadding(2, 2);
+        (layer as any).setCullPadding?.(2, 2);
       }
     }
 
@@ -1135,7 +1135,7 @@ export class WorldScene extends Phaser.Scene {
         this.chessOverlay.removeAll(arenaId);
         this.chessOverlay.showWaitingBanner(arenaId, info?.playerName || '', info?.timeLabel || '');
       } else if (status === 'in_match') {
-        this.chessOverlay.removeWaitingBanner(arenaId);
+        this.chessOverlay.removeBanner(arenaId);
         if (info?.fen) {
           this.chessOverlay.showMatchOverlay(arenaId, info.fen);
         } else {
@@ -1158,6 +1158,7 @@ export class WorldScene extends Phaser.Scene {
 
   public updateBoardFEN(tableId: string, fen: string) {
     if (this.chessOverlay) {
+      this.chessOverlay.removeBanner(tableId);
       this.chessOverlay.showMatchOverlay(tableId, fen);
     }
   }

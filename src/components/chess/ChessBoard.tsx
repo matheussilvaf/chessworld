@@ -3,7 +3,6 @@ import { useChessStore } from '../../stores/chessStore';
 import { useAuthStore } from '../../stores/authStore';
 import { BOARD_THEMES } from '../../config/game';
 import { X, Flag, Eye } from 'lucide-react';
-import { sendDrawOffer } from '../../game/network/colyseusClient';
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'];

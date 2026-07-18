@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { CHARACTERS } from '../../game/characters/characterCatalog';
-import { ArrowLeft, Save, Crosshair, Circle } from 'lucide-react';
+import { ArrowLeft, Crosshair, Circle } from 'lucide-react';
 
 interface CharacterConfig {
   character_id: string;
@@ -286,7 +286,6 @@ export function CharacterConfigEditor() {
     setSnapping({ x: false, y: false });
   };
 
-  const totalFrames = charDef ? charDef.columns * charDef.rows : 0;
   const directionNames = charDef?.directions || [];
 
   return (

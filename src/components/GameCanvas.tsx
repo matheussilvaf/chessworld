@@ -304,11 +304,11 @@ export function GameCanvas() {
     });
 
     state.boards.onAdd((board: any, _boardId: string) => {
-      updateBoardVisual(scene, board);
+      updateBoardVisual(scene, board, room);
       syncBoardsToStore(room);
 
       board.onChange(() => {
-        updateBoardVisual(scene, board);
+        updateBoardVisual(scene, board, room);
         syncBoardsToStore(room);
       });
     });
@@ -320,12 +320,17 @@ export function GameCanvas() {
     // --- Matches ---
     if (state.matches && typeof state.matches.onAdd === 'function') {
       state.matches.onAdd((match: any, _matchId: string) => {
+        // Show overlay immediately when match is added
+        if (match.boardId && match.fen && gameRef.current) {
+          const ws = getWorldScene(gameRef.current);
+          if (ws) ws.updateBoardFEN(match.boardId, match.fen);
+        }
         match.onChange(() => {
           useChessStore.getState().syncFromColyseus(match);
-          // Update board overlay with current FEN
+          // Update board overlay with current FEN for ALL clients
           if (match.boardId && match.fen && gameRef.current) {
-            const worldScene = getWorldScene(gameRef.current);
-            if (worldScene) worldScene.updateBoardFEN(match.boardId, match.fen);
+            const ws = getWorldScene(gameRef.current);
+            if (ws) ws.updateBoardFEN(match.boardId, match.fen);
           }
         });
       });
@@ -422,14 +427,27 @@ function updateOnlineCount(room: Room<any>) {
   useGameStore.getState().setOnlinePlayers(Math.max(0, count - 1));
 }
 
-function updateBoardVisual(scene: WorldScene, board: any) {
+function updateBoardVisual(scene: WorldScene, board: any, room?: Room<any>) {
   if (board.status === 'waiting') {
     scene.updateBoardStatus(board.id, 'waiting', {
       playerName: board.waitingPlayerName,
       timeLabel: board.timeLabel,
     });
   } else if (board.status === 'playing') {
-    scene.updateBoardStatus(board.id, 'in_match');
+    // Find the match FEN to show on the overlay
+    let fen = '';
+    if (room?.state?.matches && board.matchId) {
+      room.state.matches.forEach((m: any, mId: string) => {
+        if (mId === board.matchId || m.id === board.matchId) {
+          fen = m.fen || '';
+        }
+      });
+    }
+    if (fen) {
+      scene.updateBoardFEN(board.id, fen);
+    } else {
+      scene.updateBoardStatus(board.id, 'in_match');
+    }
   } else {
     scene.updateBoardStatus(board.id, 'idle');
   }

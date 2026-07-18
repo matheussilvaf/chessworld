@@ -21,8 +21,7 @@ export class ChessOverlayManager {
     container: Phaser.GameObjects.Container;
     boardGfx: Phaser.GameObjects.Graphics;
     pieces: Phaser.GameObjects.Text[];
-    statusText?: Phaser.GameObjects.Text;
-    waitingBanner?: Phaser.GameObjects.Container;
+    banner?: Phaser.GameObjects.Container;
   }>();
   private configs = new Map<string, TableOverlayConfig>();
 
@@ -32,11 +31,15 @@ export class ChessOverlayManager {
 
   registerTable(config: TableOverlayConfig) {
     this.configs.set(config.tableId, config);
+    console.log('[ChessOverlay] Registered table:', config.tableId, 'at', config.x, config.y, config.width + 'x' + config.height);
   }
 
   showMatchOverlay(tableId: string, fen: string) {
     const config = this.configs.get(tableId);
-    if (!config) return;
+    if (!config) {
+      console.warn('[ChessOverlay] showMatchOverlay: no config for', tableId);
+      return;
+    }
 
     let overlay = this.overlays.get(tableId);
     if (!overlay) {
@@ -44,15 +47,8 @@ export class ChessOverlayManager {
       this.overlays.set(tableId, overlay);
     }
 
+    this.removeBanner(tableId);
     overlay.container.setVisible(true);
-    this.removeWaitingBanner(tableId);
-    this.renderFEN(overlay, config, fen);
-  }
-
-  updatePosition(tableId: string, fen: string) {
-    const overlay = this.overlays.get(tableId);
-    const config = this.configs.get(tableId);
-    if (!overlay || !config) return;
     this.renderFEN(overlay, config, fen);
   }
 
@@ -67,17 +63,17 @@ export class ChessOverlayManager {
     const config = this.configs.get(tableId);
     if (!config) return;
 
-    this.removeWaitingBanner(tableId);
+    this.removeBanner(tableId);
 
-    const container = this.scene.add.container(
-      config.x + config.width / 2,
-      config.y - 8
-    ).setDepth(155);
+    const cx = config.x + config.width / 2;
+    const cy = config.y + config.height / 2;
 
-    const bannerW = Math.max(config.width + 16, 100);
-    const bannerH = 24;
+    const banner = this.scene.add.container(cx, cy - config.height / 2 - 14).setDepth(160);
+
+    const bannerW = Math.max(config.width, 100);
+    const bannerH = 22;
     const bg = this.scene.add.graphics();
-    bg.fillStyle(0xd97706, 0.92);
+    bg.fillStyle(0xd97706, 0.95);
     bg.fillRoundedRect(-bannerW / 2, -bannerH / 2, bannerW, bannerH, 4);
     bg.lineStyle(1, 0xfbbf24, 1);
     bg.strokeRoundedRect(-bannerW / 2, -bannerH / 2, bannerW, bannerH, 4);
@@ -90,18 +86,18 @@ export class ChessOverlayManager {
       resolution: 2,
     }).setOrigin(0.5);
 
-    const subText = this.scene.add.text(0, 6, `${playerName} - ${timeLabel}`, {
+    const sub = this.scene.add.text(0, 6, `${playerName} | ${timeLabel}`, {
       fontFamily: 'Arial, sans-serif',
       fontSize: '6px',
       color: '#fde68a',
       resolution: 2,
     }).setOrigin(0.5);
 
-    container.add([bg, text, subText]);
+    banner.add([bg, text, sub]);
 
     this.scene.tweens.add({
-      targets: container,
-      alpha: { from: 1, to: 0.6 },
+      targets: banner,
+      alpha: { from: 1, to: 0.55 },
       duration: 1200,
       yoyo: true,
       repeat: -1,
@@ -113,23 +109,23 @@ export class ChessOverlayManager {
       overlay = this.createOverlay(config);
       this.overlays.set(tableId, overlay);
     }
-    overlay.waitingBanner = container;
+    overlay.banner = banner;
   }
 
   showInProgressBanner(tableId: string) {
     const config = this.configs.get(tableId);
     if (!config) return;
-    this.removeWaitingBanner(tableId);
+    this.removeBanner(tableId);
 
-    const container = this.scene.add.container(
-      config.x + config.width / 2,
-      config.y - 8
-    ).setDepth(155);
+    const cx = config.x + config.width / 2;
+    const cy = config.y + config.height / 2;
+
+    const banner = this.scene.add.container(cx, cy - config.height / 2 - 10).setDepth(160);
 
     const bannerW = 80;
-    const bannerH = 16;
+    const bannerH = 14;
     const bg = this.scene.add.graphics();
-    bg.fillStyle(0x059669, 0.88);
+    bg.fillStyle(0x059669, 0.9);
     bg.fillRoundedRect(-bannerW / 2, -bannerH / 2, bannerW, bannerH, 3);
 
     const text = this.scene.add.text(0, 0, 'Match in progress', {
@@ -140,26 +136,26 @@ export class ChessOverlayManager {
       resolution: 2,
     }).setOrigin(0.5);
 
-    container.add([bg, text]);
+    banner.add([bg, text]);
 
     let overlay = this.overlays.get(tableId);
     if (!overlay) {
       overlay = this.createOverlay(config);
       this.overlays.set(tableId, overlay);
     }
-    overlay.waitingBanner = container;
+    overlay.banner = banner;
   }
 
-  removeWaitingBanner(tableId: string) {
+  removeBanner(tableId: string) {
     const overlay = this.overlays.get(tableId);
-    if (overlay?.waitingBanner) {
-      overlay.waitingBanner.destroy();
-      overlay.waitingBanner = undefined;
+    if (overlay?.banner) {
+      overlay.banner.destroy();
+      overlay.banner = undefined;
     }
   }
 
   removeAll(tableId: string) {
-    this.removeWaitingBanner(tableId);
+    this.removeBanner(tableId);
     this.hideMatchOverlay(tableId);
   }
 
@@ -181,12 +177,11 @@ export class ChessOverlayManager {
     const sqW = config.width / 8;
     const sqH = config.height / 8;
 
-    // Clear previous
     boardGfx.clear();
     for (const p of overlay.pieces) p.destroy();
     overlay.pieces = [];
 
-    // Draw board squares
+    // Draw board squares (opaque background)
     for (let rank = 0; rank < 8; rank++) {
       for (let file = 0; file < 8; file++) {
         const isLight = (rank + file) % 2 === 0;
@@ -195,12 +190,18 @@ export class ChessOverlayManager {
       }
     }
 
+    // Border around the board
+    boardGfx.lineStyle(1, 0x4a3520, 1);
+    boardGfx.strokeRect(0, 0, config.width, config.height);
+
     // Parse FEN and place pieces
     const fenParts = fen.split(' ')[0];
     const ranks = fenParts.split('/');
     for (let rank = 0; rank < 8; rank++) {
       let file = 0;
-      for (const ch of ranks[rank]) {
+      const rankStr = ranks[rank];
+      if (!rankStr) continue;
+      for (const ch of rankStr) {
         if (ch >= '1' && ch <= '8') {
           file += parseInt(ch);
         } else {
@@ -215,11 +216,11 @@ export class ChessOverlayManager {
               char,
               {
                 fontFamily: 'serif',
-                fontSize: `${Math.floor(sqW * 0.85)}px`,
-                color: color === 'w' ? '#ffffff' : '#1a1a1a',
-                resolution: 2,
-                stroke: color === 'w' ? '#333333' : '#888888',
-                strokeThickness: 0.5,
+                fontSize: `${Math.floor(sqW * 0.8)}px`,
+                color: color === 'w' ? '#ffffff' : '#111111',
+                resolution: 3,
+                stroke: color === 'w' ? '#222222' : '#999999',
+                strokeThickness: 0.8,
               }
             ).setOrigin(0.5);
             container.add(text);
