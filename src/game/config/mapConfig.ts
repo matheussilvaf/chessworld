@@ -16,4 +16,13 @@ export const MAP_CONFIG = {
     'collisions',
     'chess_tables_interactions',
   ],
+  zoom: {
+    default: 2,
+    min: 1,
+    max: 4,
+    step: 0.1,
+    smoothSpeed: 0.08,
+    board: 3,
+  },
+  playerSpeed: 3,
 };

@@ -11,6 +11,9 @@ export function createPhaserGame(parent: HTMLElement): Phaser.Game {
     antialias: false,
     roundPixels: true,
     backgroundColor: '#2d5a27',
+    input: {
+      activePointers: 3,
+    },
     scale: {
       mode: Phaser.Scale.RESIZE,
       autoCenter: Phaser.Scale.CENTER_BOTH,

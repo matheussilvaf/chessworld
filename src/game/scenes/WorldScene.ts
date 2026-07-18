@@ -53,11 +53,17 @@ export class WorldScene extends Phaser.Scene {
   private lastSentTime = 0;
   private readonly SEND_INTERVAL = 50;
   private movementLocked = false;
-  private defaultZoom = 2;
-  private boardZoom = 3;
+  private defaultZoom = MAP_CONFIG.zoom.default;
+  private boardZoom = MAP_CONFIG.zoom.board;
   private movementSender: MovementSender | null = null;
   private currentDirection: Direction8 = 'down';
-  private playerSpeed = 3;
+  private playerSpeed = MAP_CONFIG.playerSpeed;
+
+  // Zoom state
+  private targetZoom = MAP_CONFIG.zoom.default;
+  private pinchStartDistance = 0;
+  private pinchStartZoom = 0;
+  private isPinching = false;
 
   public onBoardClick?: (arenaId: string, arenaTitle: string) => void;
   public onHouseClick?: (houseId: string) => void;
@@ -142,8 +148,65 @@ export class WorldScene extends Phaser.Scene {
     // Click-to-move
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (this.movementLocked) return;
+      if (this.isPinching) return;
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       this.target = { x: worldPoint.x, y: worldPoint.y };
+    });
+
+    // Setup zoom controls
+    this.setupZoom();
+  }
+
+  private setupZoom() {
+    const { min, max, step } = MAP_CONFIG.zoom;
+
+    // Desktop: mouse wheel / trackpad scroll zoom
+    this.input.on('wheel', (_pointer: Phaser.Input.Pointer, _gameObjects: any[], _deltaX: number, deltaY: number) => {
+      if (this.movementLocked) return;
+      const direction = deltaY > 0 ? -1 : 1;
+      this.targetZoom = Phaser.Math.Clamp(
+        this.targetZoom + direction * step,
+        min,
+        max
+      );
+    });
+
+    // Mobile: pinch-to-zoom
+    this.input.addPointer(1); // enable 2nd pointer for multi-touch
+
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (this.input.pointer1.isDown && this.input.pointer2.isDown) {
+        this.isPinching = true;
+        const p1 = this.input.pointer1;
+        const p2 = this.input.pointer2;
+        this.pinchStartDistance = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
+        this.pinchStartZoom = this.targetZoom;
+      }
+    });
+
+    this.input.on('pointermove', () => {
+      if (!this.isPinching) return;
+      if (!this.input.pointer1.isDown || !this.input.pointer2.isDown) {
+        this.isPinching = false;
+        return;
+      }
+      const p1 = this.input.pointer1;
+      const p2 = this.input.pointer2;
+      const currentDistance = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
+      const scale = currentDistance / this.pinchStartDistance;
+      this.targetZoom = Phaser.Math.Clamp(
+        this.pinchStartZoom * scale,
+        min,
+        max
+      );
+    });
+
+    this.input.on('pointerup', () => {
+      if (this.isPinching) {
+        if (!this.input.pointer1.isDown || !this.input.pointer2.isDown) {
+          this.isPinching = false;
+        }
+      }
     });
   }
 
@@ -348,6 +411,13 @@ export class WorldScene extends Phaser.Scene {
 
   update() {
     if (!this.player || !this.playerBody) return;
+
+    // Smooth zoom interpolation
+    const currentZoom = this.cameras.main.zoom;
+    if (Math.abs(currentZoom - this.targetZoom) > 0.001) {
+      const newZoom = Phaser.Math.Linear(currentZoom, this.targetZoom, MAP_CONFIG.zoom.smoothSpeed * 2);
+      this.cameras.main.setZoom(newZoom);
+    }
 
     this.player.x = this.playerBody.position.x;
     this.player.y = this.playerBody.position.y - getCharacter().bodyOffsetY;
@@ -623,6 +693,7 @@ export class WorldScene extends Phaser.Scene {
       },
     });
 
+    this.targetZoom = this.boardZoom;
     this.cameras.main.zoomTo(this.boardZoom, 500, 'Power2');
     this.cameras.main.pan(arena.x + arena.width / 2, arena.y + arena.height / 2, 500, 'Power2');
   }
@@ -642,6 +713,7 @@ export class WorldScene extends Phaser.Scene {
 
   public unlockMovement() {
     this.movementLocked = false;
+    this.targetZoom = this.defaultZoom;
     this.cameras.main.zoomTo(this.defaultZoom, 300, 'Power2');
     if (this.player) {
       this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
