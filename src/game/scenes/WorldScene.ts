@@ -942,9 +942,15 @@ export class WorldScene extends Phaser.Scene {
 
     const dir = this.getDirection8(tdx, tdy);
     this.currentDirection = dir;
-    this.player.anims.play(getAnimKey(dir), true);
-    const animSpeed = this.playerSpeed / MAP_CONFIG.playerSpeed;
-    this.player.anims.timeScale = animSpeed;
+
+    // Stop walk animation when speed is too low (deceleration phase)
+    if (speed < this.playerSpeed * 0.35) {
+      this.player.anims.stop();
+      this.player.setFrame(getIdleFrame(dir));
+    } else {
+      this.player.anims.play(getAnimKey(dir), true);
+      this.player.anims.timeScale = speed / MAP_CONFIG.playerSpeed;
+    }
 
     const now = Date.now();
     if (now - this.lastSentTime >= this.SEND_INTERVAL) {
