@@ -693,25 +693,30 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private navigateTo(worldX: number, worldY: number) {
+    // Store click position for debug visualization (raw click)
+    this.clickMarker = { x: worldX, y: worldY };
+
+    // The sprite origin should land at the click point.
+    // Since sprite.y = body.y - playerFeetOffset, the body must reach
+    // (worldX, worldY + playerFeetOffset) for the origin to be at (worldX, worldY).
+    const targetBodyX = worldX;
+    const targetBodyY = worldY + this.playerFeetOffset;
+
     const startX = this.playerBody.position.x;
     const startY = this.playerBody.position.y;
-
-    // Store click position for debug visualization
-    this.clickMarker = { x: worldX, y: worldY };
 
     // Cancel any previous movement
     this.stuckFrames = 0;
     this.lastStuckPos = null;
     this.rerouteAttempts = 0;
-    this.finalDestination = { x: worldX, y: worldY };
+    this.finalDestination = { x: targetBodyX, y: targetBodyY };
 
-    const waypoints = this.pathfinder.findPath(startX, startY, worldX, worldY);
+    const waypoints = this.pathfinder.findPath(startX, startY, targetBodyX, targetBodyY);
     if (waypoints.length >= 2) {
       this.pathWaypoints = waypoints;
       this.currentWaypointIndex = 1;
       this.target = this.pathWaypoints[this.currentWaypointIndex];
     } else {
-      // No valid path - stop cleanly
       this.stopMovement();
     }
   }
