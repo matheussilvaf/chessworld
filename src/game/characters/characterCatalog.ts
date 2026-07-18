@@ -47,13 +47,13 @@ export const CHARACTERS: Record<string, CharacterDef> = {
     frameWidth: 104,
     frameHeight: 104,
     directions: DIRECTION_ORDER,
-    scale: 0.45,
-    bodyWidth: 16,
-    bodyHeight: 10,
+    scale: 1.0,
+    bodyWidth: 24,
+    bodyHeight: 12,
     bodyOffsetX: 0,
-    bodyOffsetY: 20,
+    bodyOffsetY: 0,
     originX: 0.5,
-    originY: 0.82,
+    originY: 0.769,
   },
 };
 

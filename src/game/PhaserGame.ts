@@ -2,15 +2,26 @@ import Phaser from 'phaser';
 import { WorldScene } from './scenes/WorldScene';
 
 export function createPhaserGame(parent: HTMLElement): Phaser.Game {
+  // Force even canvas dimensions to prevent half-pixel center offset
+  const width = Math.floor(window.innerWidth / 2) * 2;
+  const height = Math.floor(window.innerHeight / 2) * 2;
+
   const config: Phaser.Types.Core.GameConfig = {
-    type: Phaser.AUTO,
+    type: Phaser.WEBGL,
     parent,
-    width: window.innerWidth,
-    height: window.innerHeight,
+    width,
+    height,
     pixelArt: true,
     antialias: false,
     roundPixels: true,
     backgroundColor: '#2d5a27',
+    render: {
+      pixelArt: true,
+      antialias: false,
+      antialiasGL: false,
+      roundPixels: true,
+      mipmapFilter: 'NEAREST',
+    },
     input: {
       activePointers: 3,
     },

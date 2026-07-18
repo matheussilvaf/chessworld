@@ -259,7 +259,7 @@ export function GameCanvas() {
   return (
     <div
       ref={containerRef}
-      className="absolute inset-0"
+      className="absolute inset-0 overflow-hidden"
       style={{ imageRendering: 'pixelated' }}
     />
   );

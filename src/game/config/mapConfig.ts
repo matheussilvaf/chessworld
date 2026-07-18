@@ -18,10 +18,10 @@ export const MAP_CONFIG = {
   ],
   zoom: {
     default: 2,
-    min: 1,
+    min: 0.5,
     max: 4,
-    step: 0.1,
-    smoothSpeed: 0.08,
+    step: 0.25,
+    smoothSpeed: 0.12,
     board: 3,
   },
   playerSpeed: 3,

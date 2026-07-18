@@ -23,6 +23,8 @@ body {
 canvas {
   image-rendering: pixelated;
   image-rendering: crisp-edges;
+  -ms-interpolation-mode: nearest-neighbor;
+  display: block;
 }
 
 ::-webkit-scrollbar {
