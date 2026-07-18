@@ -49,6 +49,7 @@ export class ChessOverlayManager {
   private configs = new Map<string, TableOverlayConfig>();
   private assetsLoaded = false;
   private activeTableId: string | null = null;
+  private pendingFens = new Map<string, string>();
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -64,11 +65,21 @@ export class ChessOverlayManager {
       }
     }
     if (needsLoad) {
-      this.scene.load.once('complete', () => { this.assetsLoaded = true; });
+      this.scene.load.once('complete', () => {
+        this.assetsLoaded = true;
+        this.flushPending();
+      });
       this.scene.load.start();
     } else {
       this.assetsLoaded = true;
     }
+  }
+
+  private flushPending() {
+    for (const [tableId, fen] of this.pendingFens) {
+      this.showMatchOverlay(tableId, fen);
+    }
+    this.pendingFens.clear();
   }
 
   registerTable(config: TableOverlayConfig) {
@@ -82,8 +93,13 @@ export class ChessOverlayManager {
   showMatchOverlay(tableId: string, fen: string) {
     const config = this.configs.get(tableId);
     if (!config) return;
-    // Never show an empty board - must have a valid FEN with pieces
-    if (!fen || !this.assetsLoaded) return;
+    if (!fen) return;
+
+    // Queue if assets not ready yet - will render once loaded
+    if (!this.assetsLoaded) {
+      this.pendingFens.set(tableId, fen);
+      return;
+    }
 
     let overlay = this.overlays.get(tableId);
     if (!overlay) {

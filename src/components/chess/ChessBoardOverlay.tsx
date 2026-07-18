@@ -1,6 +1,42 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useChessStore } from '../../stores/chessStore';
 
+// Preload all piece images at module load so they're cached before rendering
+const preloadedImages = new Map<string, HTMLImageElement>();
+let imagesReady = false;
+const imageLoadPromises: Promise<void>[] = [];
+
+function preloadAllPieces() {
+  const paths = Object.values({
+    wp: '/assets/chesspieces/whitepawn.png',
+    wn: '/assets/chesspieces/whiteknight.png',
+    wb: '/assets/chesspieces/whitebishop.png',
+    wr: '/assets/chesspieces/whiterock.png',
+    wq: '/assets/chesspieces/whitequeen.png',
+    wk: '/assets/chesspieces/whiteking.png',
+    bp: '/assets/chesspieces/blackpawn.png',
+    bn: '/assets/chesspieces/blackknight.png',
+    bb: '/assets/chesspieces/blackbiship.png',
+    br: '/assets/chesspieces/blackrock.png',
+    bq: '/assets/chesspieces/blackqueen.png',
+    bk: '/assets/chesspieces/blackking.png',
+  });
+  for (const src of paths) {
+    const img = new Image();
+    img.src = src;
+    preloadedImages.set(src, img);
+    imageLoadPromises.push(
+      new Promise<void>((resolve) => {
+        if (img.complete) { resolve(); return; }
+        img.onload = () => resolve();
+        img.onerror = () => resolve();
+      })
+    );
+  }
+  Promise.all(imageLoadPromises).then(() => { imagesReady = true; });
+}
+preloadAllPieces();
+
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'];
 
@@ -47,6 +83,7 @@ export function ChessBoardOverlay() {
   const [dragPiece, setDragPiece] = useState<{ square: string; key: string } | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
+  const [piecesLoaded, setPiecesLoaded] = useState(imagesReady);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
@@ -60,6 +97,12 @@ export function ChessBoardOverlay() {
   // Keep refs in sync for use in callbacks
   filesRef.current = files;
   ranksRef.current = ranks;
+
+  // Wait for piece images to be cached
+  useEffect(() => {
+    if (imagesReady) { setPiecesLoaded(true); return; }
+    Promise.all(imageLoadPromises).then(() => setPiecesLoaded(true));
+  }, []);
 
   // Poll screen rect from global callback set by Phaser scene
   useEffect(() => {
@@ -143,7 +186,7 @@ export function ChessBoardOverlay() {
 
   // --- All hooks above, conditional return below ---
 
-  if (!matchId || !game || !screenRect) return null;
+  if (!matchId || !game || !screenRect || !piecesLoaded) return null;
 
   const isMyTurn = !isSpectating && !gameOver && turn === playerColor;
 
