@@ -373,7 +373,7 @@ export class WorldScene extends Phaser.Scene {
           const sprite = this.add.sprite(obj.x, obj.y, tsDef.textureKey);
           sprite.setOrigin(0, 1); // Tiled tile objects have origin at bottom-left
           sprite.setDisplaySize(obj.width || 32, obj.height || 32);
-          sprite.setDepth(layerAbove ? 200 : (obj.y || 0));
+          sprite.setDepth(layerAbove ? 200 : 0);
 
           // Handle flip flags encoded in GID
           const FLIPPED_H = 0x80000000;
