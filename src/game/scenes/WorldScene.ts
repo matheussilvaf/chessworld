@@ -1215,9 +1215,12 @@ export class WorldScene extends Phaser.Scene {
 
   public deactivateOverlayInteraction() {
     this.inMatch = false;
+    const prevTableId = this.activeOverlayTableId;
     this.activeOverlayTableId = null;
     (window as any).__chessOverlayRect = null;
-    if (this.chessOverlay) {
+    if (this.chessOverlay && prevTableId) {
+      // Clear the board state fully before releasing active table
+      this.chessOverlay.removeAll(prevTableId);
       this.chessOverlay.clearActiveTable();
     }
     // Smoothly rotate back to normal
@@ -1250,11 +1253,16 @@ export class WorldScene extends Phaser.Scene {
 
     // getWorldPoint goes screen->world, we need world->screen
     // Manual transform: account for scroll, zoom, and rotation
-    const cx = cam.scrollX + cam.width * 0.5;
-    const cy = cam.scrollY + cam.height * 0.5;
-    const cos = Math.cos(-this.currentCameraRotation);
-    const sin = Math.sin(-this.currentCameraRotation);
-    const zoom = cam.zoom;
+    // Use TARGET camera position so overlay snaps immediately
+    // while camera still animates towards this position
+    const cx = this.cameraTargetX;
+    const cy = this.cameraTargetY;
+    // Use TARGET rotation so overlay snaps to final position immediately
+    // while camera rotation animates smoothly underneath
+    const cos = Math.cos(-this.targetRotation);
+    const sin = Math.sin(-this.targetRotation);
+    // Use target zoom so overlay snaps to final size immediately
+    const zoom = this.targetZoom;
 
     const toScreen = (wx: number, wy: number) => {
       const dx = wx - cx;

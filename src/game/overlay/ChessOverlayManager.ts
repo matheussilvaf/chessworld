@@ -188,7 +188,14 @@ export class ChessOverlayManager {
 
   removeAll(tableId: string) {
     this.removeBanner(tableId);
-    this.hideMatchOverlay(tableId);
+    const overlay = this.overlays.get(tableId);
+    if (overlay) {
+      overlay.container.setVisible(false);
+      overlay.currentFen = '';
+      for (const p of overlay.pieces) p.destroy();
+      overlay.pieces = [];
+      overlay.boardGfx.clear();
+    }
   }
 
   setActiveTable(tableId: string) {
