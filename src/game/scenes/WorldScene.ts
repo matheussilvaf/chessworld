@@ -360,12 +360,6 @@ export class WorldScene extends Phaser.Scene {
         this.debugGfx.lineTo(this.pathWaypoints[i].x, this.pathWaypoints[i].y);
       }
       this.debugGfx.strokePath();
-
-      // Orange dot = current target waypoint
-      if (this.target) {
-        this.debugGfx.fillStyle(0xff8800, 1);
-        this.debugGfx.fillCircle(this.target.x, this.target.y, 3);
-      }
     }
   }
 
@@ -909,7 +903,13 @@ export class WorldScene extends Phaser.Scene {
         this.currentWaypointIndex++;
         this.target = this.pathWaypoints[this.currentWaypointIndex];
       } else {
-        // Reached final destination - stop cleanly
+        // Reached final destination - snap body to exact target and stop
+        if (this.finalDestination) {
+          this.matter.body.setPosition(this.playerBody, {
+            x: this.finalDestination.x,
+            y: this.finalDestination.y,
+          });
+        }
         this.target = null;
         this.pathWaypoints = [];
         this.currentWaypointIndex = 0;
@@ -918,6 +918,9 @@ export class WorldScene extends Phaser.Scene {
         this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
         this.player.anims.stop();
         this.player.setFrame(getIdleFrame(this.currentDirection));
+        // Update sprite position from snapped body
+        this.player.x = Math.floor(this.playerBody.position.x - this.playerFeetOffsetX);
+        this.player.y = Math.floor(this.playerBody.position.y - this.playerFeetOffset);
         this.emitMovement(false);
         if (this.onPositionUpdate) this.onPositionUpdate(this.player.x, this.player.y);
         return;
