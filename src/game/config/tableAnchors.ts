@@ -4,6 +4,23 @@ export interface SeatAnchor {
   direction: string;
 }
 
+export interface OverlayArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  boardFiles: number;
+  boardRanks: number;
+}
+
+export interface CameraFocus {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  padding: number;
+}
+
 export interface TableAnchors {
   tableId: string;
   playerTop: SeatAnchor;
@@ -16,38 +33,82 @@ export interface TableAnchors {
   exitBottom: SeatAnchor;
   exitLeft: SeatAnchor;
   exitRight: SeatAnchor;
-  cameraFocus?: { x: number; y: number; width: number; height: number };
+  cameraFocus: CameraFocus | null;
+  overlayArea: OverlayArea | null;
 }
 
-export function loadTableAnchors(tmjData: any): Map<string, TableAnchors> {
-  const result = new Map<string, TableAnchors>();
+export interface TableRegistry {
+  tables: Map<string, TableAnchors>;
+}
 
+export function loadTableRegistry(tmjData: any): TableRegistry {
   const characterAnchorsLayer = findObjectLayer(tmjData.layers, 'character_anchors');
   const cameraAnchorsLayer = findObjectLayer(tmjData.layers, 'camera_anchors');
+  const uiAnchorsLayer = findObjectLayer(tmjData.layers, 'ui_anchors');
 
-  if (!characterAnchorsLayer) return result;
+  const tables = new Map<string, TableAnchors>();
 
-  // Group anchors by tableId
+  // Group character anchors by tableId
   const byTable = new Map<string, any[]>();
-  for (const obj of characterAnchorsLayer) {
-    const props = getProps(obj);
-    const tableId = props.tableId as string;
-    if (!tableId) continue;
-    if (!byTable.has(tableId)) byTable.set(tableId, []);
-    byTable.get(tableId)!.push({ ...obj, props });
+  if (characterAnchorsLayer) {
+    for (const obj of characterAnchorsLayer) {
+      const props = getProps(obj);
+      const tableId = props.tableId as string;
+      if (!tableId) continue;
+      if (!byTable.has(tableId)) byTable.set(tableId, []);
+      byTable.get(tableId)!.push({ ...obj, props });
+    }
   }
 
-  // Load camera anchors
-  const cameraByTable = new Map<string, { x: number; y: number; width: number; height: number }>();
+  // Load camera focus areas from both camera_anchors and ui_anchors
+  const cameraByTable = new Map<string, CameraFocus>();
   if (cameraAnchorsLayer) {
     for (const obj of cameraAnchorsLayer) {
       const props = getProps(obj);
       const tableId = props.tableId as string;
       if (!tableId) continue;
-      cameraByTable.set(tableId, { x: obj.x, y: obj.y, width: obj.width || 150, height: obj.height || 150 });
+      cameraByTable.set(tableId, {
+        x: obj.x, y: obj.y,
+        width: obj.width || 150, height: obj.height || 150,
+        padding: parseInt(props.padding as string) || 32,
+      });
+    }
+  }
+  // ui_anchors camera focus areas (tables 3-14)
+  if (uiAnchorsLayer) {
+    for (const obj of uiAnchorsLayer) {
+      const props = getProps(obj);
+      const tableId = props.tableId as string;
+      if (!tableId) continue;
+      if (props.anchorType === 'camera_focus' && !cameraByTable.has(tableId)) {
+        cameraByTable.set(tableId, {
+          x: obj.x, y: obj.y,
+          width: obj.width || 150, height: obj.height || 150,
+          padding: parseInt(props.padding as string) || 32,
+        });
+      }
     }
   }
 
+  // Load overlay areas from ui_anchors
+  const overlayByTable = new Map<string, OverlayArea>();
+  if (uiAnchorsLayer) {
+    for (const obj of uiAnchorsLayer) {
+      const props = getProps(obj);
+      const tableId = props.tableId as string;
+      if (!tableId) continue;
+      if (props.anchorType === 'chess_board_overlay') {
+        overlayByTable.set(tableId, {
+          x: obj.x, y: obj.y,
+          width: obj.width || 128, height: obj.height || 128,
+          boardFiles: (props.boardFiles as number) || 8,
+          boardRanks: (props.boardRanks as number) || 8,
+        });
+      }
+    }
+  }
+
+  // Build table entries
   for (const [tableId, anchors] of byTable) {
     const find = (anchorType: string, role: string, position?: string, side?: string, seatIndex?: string): SeatAnchor => {
       const match = anchors.find(a =>
@@ -61,7 +122,7 @@ export function loadTableAnchors(tmjData: any): Map<string, TableAnchors> {
       return { x: 0, y: 0, direction: 'down' };
     };
 
-    const ta: TableAnchors = {
+    tables.set(tableId, {
       tableId,
       playerTop: find('chess_seat', 'player', 'top'),
       playerBottom: find('chess_seat', 'player', 'bottom'),
@@ -73,13 +134,12 @@ export function loadTableAnchors(tmjData: any): Map<string, TableAnchors> {
       exitBottom: find('chess_seat_exit', 'player', undefined, 'bottom'),
       exitLeft: find('chess_seat_exit', 'spectator', undefined, 'left'),
       exitRight: find('chess_seat_exit', 'spectator', undefined, 'right'),
-      cameraFocus: cameraByTable.get(tableId),
-    };
-
-    result.set(tableId, ta);
+      cameraFocus: cameraByTable.get(tableId) || null,
+      overlayArea: overlayByTable.get(tableId) || null,
+    });
   }
 
-  return result;
+  return { tables };
 }
 
 export function getSeatAnchor(

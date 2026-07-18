@@ -322,6 +322,11 @@ export function GameCanvas() {
       state.matches.onAdd((match: any, _matchId: string) => {
         match.onChange(() => {
           useChessStore.getState().syncFromColyseus(match);
+          // Update board overlay with current FEN
+          if (match.boardId && match.fen && gameRef.current) {
+            const worldScene = getWorldScene(gameRef.current);
+            if (worldScene) worldScene.updateBoardFEN(match.boardId, match.fen);
+          }
         });
       });
     }
@@ -339,17 +344,25 @@ export function GameCanvas() {
         if (worldScene && data.boardId) {
           const seat = data.color === 'w' ? 'bottom' : 'top';
           worldScene.seatPlayer(data.boardId, 'player', seat);
+          // Show initial position on the overlay
+          worldScene.updateBoardFEN(data.boardId, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
         }
       }
     });
 
     room.onMessage('match_finished', (data: any) => {
       useGameStore.getState().setLastEvent(`match_finished: ${data.result}`);
-      // Unseat after short delay so player can see result
+      // Unseat after delay so player can see result
       setTimeout(() => {
         if (gameRef.current) {
           const worldScene = getWorldScene(gameRef.current);
-          if (worldScene) worldScene.unseatPlayer();
+          if (worldScene) {
+            worldScene.unseatPlayer();
+            // Clear overlay on the board
+            if (data.boardId) {
+              worldScene.updateBoardStatus(data.boardId, 'idle');
+            }
+          }
         }
       }, 3000);
     });

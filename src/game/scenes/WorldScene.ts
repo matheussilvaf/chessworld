@@ -13,8 +13,9 @@ import { RemotePlayerInterpolator } from '../network/interpolation';
 import AStarGrid from '../pathfinding/AStarGrid';
 import { InteractionSystem } from '../interactions/InteractionSystem';
 import type { InteractionEvent, InteractionObject, ZoneChangeEvent } from '../interactions/InteractionSystem';
-import { loadTableAnchors, getSeatAnchor, getExitAnchor } from '../config/tableAnchors';
-import type { TableAnchors, SeatAnchor } from '../config/tableAnchors';
+import { loadTableRegistry, getSeatAnchor, getExitAnchor } from '../config/tableAnchors';
+import type { TableAnchors, TableRegistry } from '../config/tableAnchors';
+import { ChessOverlayManager } from '../overlay/ChessOverlayManager';
 
 interface ChessArenaZone {
   id: string;
@@ -107,9 +108,10 @@ export class WorldScene extends Phaser.Scene {
   public onZoneChange?: (event: ZoneChangeEvent) => void;
 
   private interactionSystem!: InteractionSystem;
-  private tableAnchorsMap: Map<string, TableAnchors> = new Map();
+  private tableRegistry: TableRegistry | null = null;
   private currentSeatInfo: { tableId: string; role: 'player' | 'spectator'; seat: string } | null = null;
   private savedCollisionFilter: any = null;
+  private chessOverlay!: ChessOverlayManager;
 
   constructor() {
     super({ key: 'WorldScene' });
@@ -1126,76 +1128,37 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
-  public updateBoardStatus(arenaId: string, status: string, info?: { playerName?: string; timeLabel?: string }) {
+  public updateBoardStatus(arenaId: string, status: string, info?: { playerName?: string; timeLabel?: string; fen?: string }) {
+    // Use overlay manager if available
+    if (this.chessOverlay) {
+      if (status === 'waiting') {
+        this.chessOverlay.removeAll(arenaId);
+        this.chessOverlay.showWaitingBanner(arenaId, info?.playerName || '', info?.timeLabel || '');
+      } else if (status === 'in_match') {
+        this.chessOverlay.removeWaitingBanner(arenaId);
+        if (info?.fen) {
+          this.chessOverlay.showMatchOverlay(arenaId, info.fen);
+        } else {
+          this.chessOverlay.showInProgressBanner(arenaId);
+        }
+      } else {
+        this.chessOverlay.removeAll(arenaId);
+      }
+      return;
+    }
+
+    // Fallback to old arena-based indicators
     const arena = this.arenas.find(a => a.id === arenaId || a.title === arenaId || a.name === arenaId);
     if (!arena) return;
-
     if (arena.statusIndicator) {
       arena.statusIndicator.destroy();
       arena.statusIndicator = undefined;
     }
+  }
 
-    const cx = arena.x + arena.width / 2;
-    const cy = arena.y + arena.height / 2;
-
-    if (status === 'waiting') {
-      const container = this.add.container(cx, cy - 24).setDepth(150);
-      const bannerW = Math.max(arena.width + 16, 80);
-      const bannerH = info?.playerName ? 28 : 16;
-      const bg = this.add.graphics();
-      bg.fillStyle(0xd97706, 0.92);
-      bg.fillRoundedRect(-bannerW / 2, -bannerH / 2, bannerW, bannerH, 3);
-      bg.lineStyle(1, 0xfbbf24, 1);
-      bg.strokeRoundedRect(-bannerW / 2, -bannerH / 2, bannerW, bannerH, 3);
-
-      const label = this.add.text(0, info?.playerName ? -5 : 0, 'Waiting for duel', {
-        fontFamily: 'Arial, sans-serif',
-        fontSize: '8px',
-        fontStyle: 'bold',
-        color: '#ffffff',
-        resolution: 2,
-      }).setOrigin(0.5);
-      container.add([bg, label]);
-
-      if (info?.playerName) {
-        const subText = info.timeLabel ? `${info.playerName} - ${info.timeLabel}` : info.playerName;
-        const sub = this.add.text(0, 7, subText, {
-          fontFamily: 'Arial, sans-serif',
-          fontSize: '7px',
-          color: '#fde68a',
-          resolution: 2,
-        }).setOrigin(0.5);
-        container.add(sub);
-      }
-
-      this.tweens.add({
-        targets: container,
-        alpha: { from: 1, to: 0.7 },
-        duration: 1000,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut',
-      });
-      arena.statusIndicator = container;
-    } else if (status === 'in_match') {
-      const container = this.add.container(cx, cy - 20).setDepth(150);
-      const bannerW = Math.max(arena.width + 8, 70);
-      const bannerH = 16;
-      const bg = this.add.graphics();
-      bg.fillStyle(0x1d4ed8, 0.92);
-      bg.fillRoundedRect(-bannerW / 2, -bannerH / 2, bannerW, bannerH, 3);
-      bg.lineStyle(1, 0x60a5fa, 1);
-      bg.strokeRoundedRect(-bannerW / 2, -bannerH / 2, bannerW, bannerH, 3);
-
-      const label = this.add.text(0, 0, 'In match', {
-        fontFamily: 'Arial, sans-serif',
-        fontSize: '8px',
-        fontStyle: 'bold',
-        color: '#ffffff',
-        resolution: 2,
-      }).setOrigin(0.5);
-      container.add([bg, label]);
-      arena.statusIndicator = container;
+  public updateBoardFEN(tableId: string, fen: string) {
+    if (this.chessOverlay) {
+      this.chessOverlay.showMatchOverlay(tableId, fen);
     }
   }
 
@@ -1283,19 +1246,28 @@ export class WorldScene extends Phaser.Scene {
 
   public loadTableAnchorsFromTMJ() {
     const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
-    if (tmjData) {
-      this.tableAnchorsMap = loadTableAnchors(tmjData);
-      console.log('[WorldScene] Table anchors loaded for', this.tableAnchorsMap.size, 'tables:', [...this.tableAnchorsMap.keys()].join(', '));
-      // Debug: log first table's anchors
-      const first = this.tableAnchorsMap.get('table_01');
-      if (first) {
-        console.log('[WorldScene] table_01 playerTop:', first.playerTop, 'playerBottom:', first.playerBottom);
+    if (!tmjData) return;
+
+    this.tableRegistry = loadTableRegistry(tmjData);
+    console.log('[WorldScene] Table registry loaded:', this.tableRegistry.tables.size, 'tables');
+
+    // Initialize chess overlay manager and register all tables
+    this.chessOverlay = new ChessOverlayManager(this);
+    for (const [tableId, anchors] of this.tableRegistry.tables) {
+      if (anchors.overlayArea) {
+        this.chessOverlay.registerTable({
+          tableId,
+          x: anchors.overlayArea.x,
+          y: anchors.overlayArea.y,
+          width: anchors.overlayArea.width,
+          height: anchors.overlayArea.height,
+        });
       }
     }
   }
 
   public seatPlayer(tableId: string, role: 'player' | 'spectator', seat: string) {
-    const anchors = this.tableAnchorsMap.get(tableId);
+    const anchors = this.tableRegistry?.tables.get(tableId);
     if (!anchors || !this.player) {
       console.warn('[WorldScene] seatPlayer: no anchors for', tableId);
       return;
@@ -1307,7 +1279,7 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    console.log('[WorldScene] seatPlayer:', tableId, role, seat, 'anchor:', anchor.x, anchor.y, anchor.direction);
+    console.log('[WorldScene] seatPlayer:', tableId, role, seat, '->', anchor.x, anchor.y, anchor.direction);
 
     this.currentSeatInfo = { tableId, role, seat };
     this.movementLocked = true;
@@ -1323,7 +1295,7 @@ export class WorldScene extends Phaser.Scene {
       collisionFilter: { group: -1, category: 0, mask: 0 },
     } as any);
 
-    // Anchor coords are world sprite positions - convert to body position
+    // Anchor coords are sprite world positions - convert to body position
     const targetBodyX = anchor.x + this.playerFeetOffsetX;
     const targetBodyY = anchor.y + this.playerFeetOffset;
 
@@ -1341,37 +1313,33 @@ export class WorldScene extends Phaser.Scene {
         this.currentDirection = anchor.direction as any;
         this.player.anims.stop();
         this.player.setFrame(getIdleFrame(this.currentDirection));
-        // Keep collisions disabled while seated
       },
     });
 
-    // Focus camera on table
+    // Focus camera on table using camera focus area
     const cam = anchors.cameraFocus;
     if (cam) {
       this.cameraFollowing = false;
       this.cameraTargetX = cam.x + cam.width / 2;
       this.cameraTargetY = cam.y + cam.height / 2;
       this.targetZoom = this.boardZoom;
-    } else {
-      // Fallback: zoom to board center using arena
-      const arena = this.arenas.find(a => a.id === tableId);
-      if (arena) {
-        this.cameraFollowing = false;
-        this.cameraTargetX = arena.x + arena.width / 2;
-        this.cameraTargetY = arena.y + arena.height / 2;
-        this.targetZoom = this.boardZoom;
-      }
+    } else if (anchors.overlayArea) {
+      this.cameraFollowing = false;
+      this.cameraTargetX = anchors.overlayArea.x + anchors.overlayArea.width / 2;
+      this.cameraTargetY = anchors.overlayArea.y + anchors.overlayArea.height / 2;
+      this.targetZoom = this.boardZoom;
     }
   }
 
   public unseatPlayer() {
     if (!this.currentSeatInfo) {
+      this.restorePhysics();
       this.unlockMovement();
       return;
     }
 
     const { tableId, role, seat } = this.currentSeatInfo;
-    const anchors = this.tableAnchorsMap.get(tableId);
+    const anchors = this.tableRegistry?.tables.get(tableId);
     this.currentSeatInfo = null;
 
     console.log('[WorldScene] unseatPlayer:', tableId, role, seat);
@@ -1396,13 +1364,7 @@ export class WorldScene extends Phaser.Scene {
             this.currentDirection = exit.direction as any;
             this.player.anims.stop();
             this.player.setFrame(getIdleFrame(this.currentDirection));
-            // Restore collisions
-            if (this.savedCollisionFilter) {
-              this.matter.body.set(this.playerBody, {
-                collisionFilter: this.savedCollisionFilter,
-              } as any);
-              this.savedCollisionFilter = null;
-            }
+            this.restorePhysics();
             this.unlockMovement();
           },
         });
@@ -1412,18 +1374,27 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // Fallback: just restore collisions and unlock
+    this.restorePhysics();
+    this.unlockMovement();
+    this.targetZoom = this.defaultZoom;
+    this.cameraFollowing = true;
+  }
+
+  private restorePhysics() {
     if (this.savedCollisionFilter) {
       this.matter.body.set(this.playerBody, {
         collisionFilter: this.savedCollisionFilter,
       } as any);
       this.savedCollisionFilter = null;
     }
-    this.unlockMovement();
   }
 
   public getTableAnchors(tableId: string): TableAnchors | undefined {
-    return this.tableAnchorsMap.get(tableId);
+    return this.tableRegistry?.tables.get(tableId);
+  }
+
+  public getChessOverlay(): ChessOverlayManager | null {
+    return this.chessOverlay || null;
   }
 
   public isSeated(): boolean {
