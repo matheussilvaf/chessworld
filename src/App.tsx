@@ -15,6 +15,7 @@ import { VoiceChatPanel } from './components/game/VoiceChatPanel';
 
 import { InteractionDebugModal } from './components/game/InteractionDebugModal';
 import { MatchHUD } from './components/game/MatchHUD';
+import { ChessBoardOverlay } from './components/chess/ChessBoardOverlay';
 import { ProximityButton } from './components/game/ProximityButton';
 import { ZoneIndicator } from './components/game/ZoneIndicator';
 import { useColyseusConnection } from './hooks/useColyseusConnection';
@@ -77,6 +78,7 @@ function GameScene() {
       <ProximityButton />
       <ZoneIndicator />
       <MatchHUD />
+      <ChessBoardOverlay />
     </div>
   );
 }

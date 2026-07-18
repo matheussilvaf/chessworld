@@ -534,12 +534,18 @@ export class WorldRoom extends Room<WorldState> {
 
     joiningPlayer.currentBoardId = board.id;
 
-    const whiteSessionId = this.findSessionByPlayerId(whiteId);
-    if (whiteSessionId) {
-      const whiteClient = this.clients.find(c => c.sessionId === whiteSessionId);
-      whiteClient?.send('match_started', { matchId, boardId: board.id, color: 'w' });
+    // Send match_started to both players with correct color
+    const challengerSessionId = this.findSessionByPlayerId(board.waitingPlayerId);
+    const challengerColor2 = board.waitingPlayerId === whiteId ? 'w' : 'b';
+    const joinerColor = board.waitingPlayerId === whiteId ? 'b' : 'w';
+
+    if (challengerSessionId) {
+      const challengerClient = this.clients.find(c => c.sessionId === challengerSessionId);
+      if (challengerClient) {
+        challengerClient.send('match_started', { matchId, boardId: board.id, color: challengerColor2 });
+      }
     }
-    joiningClient.send('match_started', { matchId, boardId: board.id, color: 'b' });
+    joiningClient.send('match_started', { matchId, boardId: board.id, color: joinerColor });
 
     console.log(`[WorldRoom] Match started: ${matchId} (${whitePlayerName} vs ${blackPlayerName}) on ${board.name}`);
   }

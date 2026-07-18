@@ -336,6 +336,9 @@ export class WorldScene extends Phaser.Scene {
     // Final pixel-perfect camera snap (last thing before render)
     this.snapCameraToTarget();
 
+    // Publish active table screen rect for HTML overlay
+    this.publishOverlayRect();
+
     // Snap remote players to integer positions too
     this.otherPlayers.forEach((remote) => {
       const pos = remote.interpolator.getPosition();
@@ -1199,6 +1202,7 @@ export class WorldScene extends Phaser.Scene {
 
   public activateOverlayInteraction(tableId: string, playerColor?: 'w' | 'b') {
     this.inMatch = true;
+    this.activeOverlayTableId = tableId;
     if (this.chessOverlay) {
       this.chessOverlay.setActiveTable(tableId);
     }
@@ -1210,6 +1214,8 @@ export class WorldScene extends Phaser.Scene {
 
   public deactivateOverlayInteraction() {
     this.inMatch = false;
+    this.activeOverlayTableId = null;
+    (window as any).__chessOverlayRect = null;
     if (this.chessOverlay) {
       this.chessOverlay.clearActiveTable();
     }
@@ -1217,6 +1223,61 @@ export class WorldScene extends Phaser.Scene {
     this.targetRotation = 0;
     // Reset zoom to default
     this.targetZoom = MAP_CONFIG.zoom.default;
+  }
+
+  private activeOverlayTableId: string | null = null;
+
+  private publishOverlayRect() {
+    if (!this.inMatch || !this.activeOverlayTableId) {
+      (window as any).__chessOverlayRect = null;
+      return;
+    }
+    const config = this.chessOverlay?.getTableConfig(this.activeOverlayTableId);
+    if (!config) {
+      (window as any).__chessOverlayRect = null;
+      return;
+    }
+    const cam = this.cameras.main;
+    const canvasEl = this.game.canvas;
+    const canvasRect = canvasEl.getBoundingClientRect();
+    const scaleX = canvasRect.width / canvasEl.width;
+    const scaleY = canvasRect.height / canvasEl.height;
+
+    // Use Phaser's built-in world-to-camera transform
+    const topLeftWorld = new Phaser.Math.Vector2(config.x, config.y);
+    const botRightWorld = new Phaser.Math.Vector2(config.x + config.width, config.y + config.height);
+
+    // getWorldPoint goes screen->world, we need world->screen
+    // Manual transform: account for scroll, zoom, and rotation
+    const cx = cam.scrollX + cam.width * 0.5;
+    const cy = cam.scrollY + cam.height * 0.5;
+    const cos = Math.cos(-this.currentCameraRotation);
+    const sin = Math.sin(-this.currentCameraRotation);
+    const zoom = cam.zoom;
+
+    const toScreen = (wx: number, wy: number) => {
+      const dx = wx - cx;
+      const dy = wy - cy;
+      const rx = dx * cos - dy * sin;
+      const ry = dx * sin + dy * cos;
+      return {
+        x: (rx * zoom + cam.width * 0.5) * scaleX + canvasRect.left,
+        y: (ry * zoom + cam.height * 0.5) * scaleY + canvasRect.top,
+      };
+    };
+
+    const tl = toScreen(topLeftWorld.x, topLeftWorld.y);
+    const br = toScreen(botRightWorld.x, botRightWorld.y);
+
+    // When rotated 180°, tl and br swap
+    const screenX = Math.min(tl.x, br.x);
+    const screenY = Math.min(tl.y, br.y);
+    const screenW = Math.abs(br.x - tl.x);
+    const screenH = Math.abs(br.y - tl.y);
+
+    (window as any).__chessOverlayRect = {
+      x: screenX, y: screenY, width: screenW, height: screenH,
+    };
   }
 
   public movePlayerToBoard(arenaId: string, side: 'left' | 'right') {
