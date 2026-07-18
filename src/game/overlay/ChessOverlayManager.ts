@@ -25,6 +25,8 @@ const PIECE_PATHS: Record<string, string> = {
   overlay_bp: 'assets/chesspieces/blackpawn.png',
 };
 
+const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
 export interface TableOverlayConfig {
   tableId: string;
   x: number;
@@ -80,6 +82,8 @@ export class ChessOverlayManager {
   showMatchOverlay(tableId: string, fen: string) {
     const config = this.configs.get(tableId);
     if (!config) return;
+    // Never show an empty board - must have a valid FEN with pieces
+    if (!fen || !this.assetsLoaded) return;
 
     let overlay = this.overlays.get(tableId);
     if (!overlay) {
@@ -90,13 +94,13 @@ export class ChessOverlayManager {
     this.removeBanner(tableId);
     overlay.currentFen = fen;
 
-    // If active table, hide Phaser overlay - HTML takes over
+    // If active table (this player is playing), hide Phaser overlay - HTML takes over
     if (this.activeTableId === tableId) {
       overlay.container.setVisible(false);
       return;
     }
 
-    // For other players walking past, render a small board preview
+    // For spectators walking past, render a board preview with pieces
     overlay.container.setVisible(true);
     this.renderBoardPreview(tableId);
   }
@@ -141,15 +145,18 @@ export class ChessOverlayManager {
       duration: 1200, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
     });
 
+    // Store banner reference - do NOT create overlay (no checkerboard for waiting state)
     let overlay = this.overlays.get(tableId);
     if (!overlay) {
       overlay = this.createOverlay(config);
       this.overlays.set(tableId, overlay);
     }
+    // Keep overlay hidden - waiting state only shows banner, never the board
+    overlay.container.setVisible(false);
     overlay.banner = banner;
   }
 
-  showInProgressBanner(tableId: string) {
+  showInProgressBanner(tableId: string, fen?: string) {
     const config = this.configs.get(tableId);
     if (!config) return;
     this.removeBanner(tableId);
@@ -176,6 +183,14 @@ export class ChessOverlayManager {
       this.overlays.set(tableId, overlay);
     }
     overlay.banner = banner;
+
+    // If we have a FEN (starting position), show the board with pieces
+    const fenToUse = fen || STARTING_FEN;
+    if (this.assetsLoaded) {
+      overlay.currentFen = fenToUse;
+      overlay.container.setVisible(true);
+      this.renderBoardPreview(tableId);
+    }
   }
 
   removeBanner(tableId: string) {
@@ -235,6 +250,12 @@ export class ChessOverlayManager {
     const config = this.configs.get(tableId);
     if (!overlay || !config) return;
 
+    // Never render a board without pieces
+    if (!overlay.currentFen || !this.assetsLoaded) {
+      overlay.container.setVisible(false);
+      return;
+    }
+
     const { boardGfx, container } = overlay;
     const sqW = config.width / 8;
     const sqH = config.height / 8;
@@ -252,8 +273,7 @@ export class ChessOverlayManager {
       }
     }
 
-    // Parse FEN and render piece previews
-    if (!overlay.currentFen || !this.assetsLoaded) return;
+    // Parse FEN and render pieces
     const fenParts = overlay.currentFen.split(' ')[0];
     const ranks = fenParts.split('/');
     for (let rank = 0; rank < 8; rank++) {

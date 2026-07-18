@@ -457,11 +457,9 @@ function updateBoardVisual(scene: WorldScene, board: any, room?: Room<any>) {
         }
       });
     }
-    if (fen) {
-      scene.updateBoardFEN(board.id, fen);
-    } else {
-      scene.updateBoardStatus(board.id, 'in_match');
-    }
+    // Always show the board with pieces - use starting FEN as fallback
+    const fenToShow = fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    scene.updateBoardFEN(board.id, fenToShow);
   } else {
     scene.updateBoardStatus(board.id, 'idle');
   }

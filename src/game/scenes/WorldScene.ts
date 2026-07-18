@@ -1207,9 +1207,11 @@ export class WorldScene extends Phaser.Scene {
     if (this.chessOverlay) {
       this.chessOverlay.setActiveTable(tableId);
     }
-    // Rotate 180° for black player so they see from their perspective
+    // Rotate 180° for black player - SNAP instantly (no animation)
     if (playerColor === 'b') {
       this.targetRotation = Math.PI;
+      this.currentCameraRotation = Math.PI;
+      this.cameras.main.setRotation(Math.PI);
     }
   }
 
@@ -1253,16 +1255,12 @@ export class WorldScene extends Phaser.Scene {
 
     // getWorldPoint goes screen->world, we need world->screen
     // Manual transform: account for scroll, zoom, and rotation
-    // Use TARGET camera position so overlay snaps immediately
-    // while camera still animates towards this position
-    const cx = this.cameraTargetX;
-    const cy = this.cameraTargetY;
-    // Use TARGET rotation so overlay snaps to final position immediately
-    // while camera rotation animates smoothly underneath
-    const cos = Math.cos(-this.targetRotation);
-    const sin = Math.sin(-this.targetRotation);
-    // Use target zoom so overlay snaps to final size immediately
-    const zoom = this.targetZoom;
+    // Use CURRENT camera values so overlay tracks the board exactly
+    const cx = cam.scrollX + cam.width * 0.5;
+    const cy = cam.scrollY + cam.height * 0.5;
+    const cos = Math.cos(-this.currentCameraRotation);
+    const sin = Math.sin(-this.currentCameraRotation);
+    const zoom = cam.zoom;
 
     const toScreen = (wx: number, wy: number) => {
       const dx = wx - cx;
