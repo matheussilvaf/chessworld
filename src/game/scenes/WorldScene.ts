@@ -898,7 +898,7 @@ export class WorldScene extends Phaser.Scene {
 
     // Check if we've arrived at the current waypoint
     const isLastWaypoint = this.currentWaypointIndex >= this.pathWaypoints.length - 1;
-    const arrivalThreshold = isLastWaypoint ? this.playerSpeed * 1.5 : this.playerSpeed * 2.5;
+    const arrivalThreshold = isLastWaypoint ? 1.0 : this.playerSpeed * 2.5;
 
     if (dist < arrivalThreshold) {
       if (!isLastWaypoint) {
@@ -906,7 +906,7 @@ export class WorldScene extends Phaser.Scene {
         this.currentWaypointIndex++;
         this.target = this.pathWaypoints[this.currentWaypointIndex];
       } else {
-        // Reached final destination - stop naturally (no snap to avoid collision bypass)
+        // Reached final destination - stop
         this.target = null;
         this.pathWaypoints = [];
         this.currentWaypointIndex = 0;
@@ -927,10 +927,13 @@ export class WorldScene extends Phaser.Scene {
     const tdist = Math.sqrt(tdx * tdx + tdy * tdy);
     if (tdist < 0.1) return;
 
-    // Decelerate when approaching the final destination
+    // Smoothly decelerate when approaching the final destination
     let speed = this.playerSpeed;
-    if (isLastWaypoint && tdist < this.playerSpeed * 4) {
-      speed = Math.max(0.8, this.playerSpeed * (tdist / (this.playerSpeed * 4)));
+    if (isLastWaypoint) {
+      const decelZone = this.playerSpeed * 6;
+      if (tdist < decelZone) {
+        speed = Math.max(0.4, this.playerSpeed * (tdist / decelZone));
+      }
     }
 
     const vx = (tdx / tdist) * speed;
