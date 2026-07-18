@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import decomp from 'poly-decomp';
 import { MAP_CONFIG } from '../config/mapConfig';
-import { WORLD_TILESETS } from '../config/worldAssets';
+import { WORLD_TILESETS, findTilesetForGid } from '../config/worldAssets';
 import {
   getCharacter,
   getIdleFrame,
@@ -59,7 +59,6 @@ export class WorldScene extends Phaser.Scene {
   private currentDirection: Direction8 = 'down';
   private playerSpeed = 3;
 
-
   public onBoardClick?: (arenaId: string, arenaTitle: string) => void;
   public onHouseClick?: (houseId: string) => void;
   public onPositionUpdate?: (x: number, y: number) => void;
@@ -70,7 +69,6 @@ export class WorldScene extends Phaser.Scene {
   }
 
   preload() {
-    // Register poly-decomp for concave polygon support
     (window as any).decomp = decomp;
 
     this.load.tilemapTiledJSON(MAP_CONFIG.key, MAP_CONFIG.path);
@@ -82,39 +80,49 @@ export class WorldScene extends Phaser.Scene {
     });
 
     for (const ts of WORLD_TILESETS) {
-      this.load.image(ts.name, MAP_CONFIG.basePath + ts.image);
+      this.load.image(ts.textureKey, MAP_CONFIG.basePath + ts.image);
     }
   }
 
   create() {
     const map = this.make.tilemap({ key: MAP_CONFIG.key });
 
-    // Add all tilesets
+    // Add regular tilesets (spritesheet-based, with top-level image in TMJ)
     const tilesets: Phaser.Tilemaps.Tileset[] = [];
     for (const ts of WORLD_TILESETS) {
-      const added = map.addTilesetImage(ts.name, ts.name);
+      if (ts.isSingleImage) continue;
+      const added = map.addTilesetImage(ts.tiledName, ts.textureKey);
       if (added) tilesets.push(added);
     }
 
     const logicalSet = new Set(MAP_CONFIG.logicalLayers.map(l => l.toLowerCase()));
 
-    // Create tile layers (skip logical layers)
-    map.layers.forEach((layerData) => {
+    // Create ALL tile layers by index to handle duplicate names
+    for (let i = 0; i < map.layers.length; i++) {
+      const layerData = map.layers[i];
       const lowerName = layerData.name.toLowerCase();
-      if (logicalSet.has(lowerName)) return;
-      const layer = map.createLayer(layerData.name, tilesets);
-      if (layer) {
-        layer.setDepth(this.getLayerDepth(layerData.name, map));
-      }
-    });
 
-    // Process layer groups — render tile layers and tile objects
-    this.renderGroupedLayers(map, tilesets, logicalSet);
+      // Skip logical layers (check both full name and last segment)
+      const shortName = lowerName.split('/').pop() || lowerName;
+      if (logicalSet.has(lowerName) || logicalSet.has(shortName)) continue;
+
+      // Skip if already created
+      if (layerData.tilemapLayer) continue;
+
+      const layer = map.createLayer(i, tilesets);
+      if (layer) {
+        const isAbove = lowerName.includes('visual_above/') || lowerName.includes('(above)');
+        layer.setDepth(isAbove ? 200 : 0);
+      }
+    }
+
+    // Render GID-based tile objects (from ImageCollections) as sprites
+    this.renderTileObjects(map, logicalSet);
 
     // Set up Matter world bounds
     this.matter.world.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
 
-    // Load collisions from object layer
+    // Load collisions
     this.setupCollisions(map);
 
     // Setup chess table interactives
@@ -139,78 +147,45 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
-  private renderGroupedLayers(
-    map: Phaser.Tilemaps.Tilemap,
-    _tilesets: Phaser.Tilemaps.Tileset[],
-    logicalSet: Set<string>,
-  ) {
+  private renderTileObjects(map: Phaser.Tilemaps.Tilemap, logicalSet: Set<string>) {
     const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
     if (!tmjData) return;
 
-    const processLayers = (layers: any[], isAbove: boolean, groupPrefix: string) => {
+    const processLayers = (layers: any[], isAbove: boolean) => {
       for (const layerData of layers) {
-        const fullName = groupPrefix ? `${groupPrefix}/${layerData.name}` : layerData.name;
         const lowerName = layerData.name.toLowerCase();
-
-        if (logicalSet.has(lowerName)) continue;
 
         if (layerData.type === 'group') {
           const nowAbove = isAbove || lowerName === 'visual_above';
-          processLayers(layerData.layers || [], nowAbove, fullName);
-        } else if (layerData.type === 'tilelayer') {
-          // Already handled by Phaser's flat layer creation
-        } else if (layerData.type === 'objectgroup') {
-          if (logicalSet.has(lowerName)) continue;
-          // Render tile objects (GID-based)
-          const objLayer = map.objects.find(
-            (ol) => ol.name === layerData.name || ol.name === fullName.split('/').pop()
-          );
-          if (objLayer) {
-            for (const obj of objLayer.objects) {
-              if (obj.gid && obj.visible !== false) {
-                const created = map.createFromObjects(objLayer.name, { id: obj.id });
-                if (created && created.length > 0) {
-                  for (const go of created) {
-                    (go as any).setDepth?.(isAbove ? 200 : (obj.y || 0));
-                  }
-                }
-              }
-            }
-          }
+          processLayers(layerData.layers || [], nowAbove);
+          continue;
+        }
+
+        if (layerData.type !== 'objectgroup') continue;
+        if (logicalSet.has(lowerName)) continue;
+
+        for (const obj of (layerData.objects || [])) {
+          if (!obj.gid || obj.visible === false) continue;
+
+          const rawGid = obj.gid;
+          const tsDef = findTilesetForGid(rawGid);
+          if (!tsDef || !tsDef.isSingleImage) continue;
+
+          const sprite = this.add.sprite(obj.x, obj.y, tsDef.textureKey);
+          sprite.setOrigin(0, 1); // Tiled tile objects have origin at bottom-left
+          sprite.setDisplaySize(obj.width || tsDef.tileWidth, obj.height || tsDef.tileHeight);
+          sprite.setDepth(isAbove ? 200 : (obj.y || 0));
+
+          // Handle flip flags encoded in GID
+          const FLIPPED_H = 0x80000000;
+          const FLIPPED_V = 0x40000000;
+          if (rawGid & FLIPPED_H) sprite.setFlipX(true);
+          if (rawGid & FLIPPED_V) sprite.setFlipY(true);
         }
       }
     };
 
-    processLayers(tmjData.layers || [], false, '');
-  }
-
-  private getLayerDepth(layerName: string, _map: Phaser.Tilemaps.Tilemap): number {
-    const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
-    if (!tmjData) return 0;
-
-    const isInAboveGroup = this.isLayerInGroup(layerName, 'VISUAL_ABOVE', tmjData.layers);
-    if (isInAboveGroup) return 200;
-    return 0;
-  }
-
-  private isLayerInGroup(layerName: string, groupName: string, layers: any[]): boolean {
-    for (const l of layers) {
-      if (l.type === 'group' && l.name === groupName) {
-        return this.containsLayer(layerName, l.layers || []);
-      }
-      if (l.type === 'group' && l.layers) {
-        if (this.isLayerInGroup(layerName, groupName, l.layers)) return true;
-      }
-    }
-    return false;
-  }
-
-  private containsLayer(name: string, layers: any[]): boolean {
-    for (const l of layers) {
-      if (l.name === name) return true;
-      if (l.layers && this.containsLayer(name, l.layers)) return true;
-    }
-    return false;
+    processLayers(tmjData.layers || [], false);
   }
 
   private findSpawnPoint(map: Phaser.Tilemaps.Tilemap): { x: number; y: number } {
@@ -225,7 +200,6 @@ export class WorldScene extends Phaser.Scene {
         return { x: spawnObj.x, y: spawnObj.y };
       }
     }
-    console.error('[WorldScene] main_player_spawn not found, using fallback');
     return { x: 1273, y: 926 };
   }
 
@@ -255,7 +229,7 @@ export class WorldScene extends Phaser.Scene {
     this.matter.add.rectangle(cx, cy, obj.width, obj.height, {
       isStatic: true,
       label,
-      // @ts-ignore - store custom data
+      // @ts-ignore
       customData: labelData,
     });
   }
@@ -285,7 +259,6 @@ export class WorldScene extends Phaser.Scene {
         customData: labelData,
       });
       if (!body) {
-        // Fallback: bounding box
         const minX = Math.min(...vertices.map((v: { x: number }) => v.x));
         const maxX = Math.max(...vertices.map((v: { x: number }) => v.x));
         const minY = Math.min(...vertices.map((v: { y: number }) => v.y));
@@ -302,7 +275,7 @@ export class WorldScene extends Phaser.Scene {
         });
       }
     } catch (e) {
-      console.warn(`[Collision] Failed to create polygon for "${label}":`, e);
+      console.warn(`[Collision] Failed polygon "${label}":`, e);
     }
   }
 
@@ -335,7 +308,6 @@ export class WorldScene extends Phaser.Scene {
       this.arenas.push({ id, name: objName, title, x, y, width: w, height: h, zone });
       arenaCount++;
     }
-    console.log(`[Interactives] Total chess arenas detected: ${arenaCount}`);
   }
 
   private createPlayer(x: number, y: number) {
@@ -356,7 +328,6 @@ export class WorldScene extends Phaser.Scene {
         frictionStatic: 0,
       }
     );
-    // Prevent rotation
     this.matter.body.setInertia(this.playerBody, Infinity);
   }
 
@@ -378,18 +349,15 @@ export class WorldScene extends Phaser.Scene {
   update() {
     if (!this.player || !this.playerBody) return;
 
-    // Sync sprite to body
     this.player.x = this.playerBody.position.x;
     this.player.y = this.playerBody.position.y - getCharacter().bodyOffsetY;
 
-    // Update remote players
     this.otherPlayers.forEach((remote) => {
       const pos = remote.interpolator.getPosition();
       remote.container.x = pos.x;
       remote.container.y = pos.y;
       if (remote.isMoving) {
-        const animKey = getAnimKey(remote.direction);
-        remote.sprite.anims.play(animKey, true);
+        remote.sprite.anims.play(getAnimKey(remote.direction), true);
       } else {
         remote.sprite.anims.stop();
         remote.sprite.setFrame(getIdleFrame(remote.direction));
@@ -422,12 +390,10 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    // Normalize and set velocity
     const vx = (dx / dist) * this.playerSpeed;
     const vy = (dy / dist) * this.playerSpeed;
     this.matter.body.setVelocity(this.playerBody, { x: vx, y: vy });
 
-    // Determine 8-direction
     const dir = this.getDirection8(dx, dy);
     this.currentDirection = dir;
     this.player.anims.play(getAnimKey(dir), true);
@@ -445,7 +411,6 @@ export class WorldScene extends Phaser.Scene {
 
   private getDirection8(dx: number, dy: number): Direction8 {
     const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-    // angle: -180 to 180, 0 = right
     if (angle >= -22.5 && angle < 22.5) return 'right';
     if (angle >= 22.5 && angle < 67.5) return 'down-right';
     if (angle >= 67.5 && angle < 112.5) return 'down';
