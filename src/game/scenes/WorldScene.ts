@@ -308,15 +308,33 @@ export class WorldScene extends Phaser.Scene {
     const by = this.playerBody.position.y;
     const radius = 10;
 
-    // RED circle = physics body (collision circle)
+    // WHITE rectangle = full character frame canvas
+    const charDef = getCharacter();
+    const fw = charDef.frameWidth * charDef.scale;
+    const fh = charDef.frameHeight * charDef.scale;
+    const frameX = this.player.x - charDef.originX * fw;
+    const frameY = this.player.y - charDef.originY * fh;
+    this.debugGfx.lineStyle(1, 0xffffff, 0.6);
+    this.debugGfx.strokeRect(frameX, frameY, fw, fh);
+
+    // CYAN crosshair = sprite origin point (player.x, player.y)
+    this.debugGfx.lineStyle(1, 0x00ffff, 0.9);
+    this.debugGfx.beginPath();
+    this.debugGfx.moveTo(this.player.x - 6, this.player.y);
+    this.debugGfx.lineTo(this.player.x + 6, this.player.y);
+    this.debugGfx.moveTo(this.player.x, this.player.y - 6);
+    this.debugGfx.lineTo(this.player.x, this.player.y + 6);
+    this.debugGfx.strokePath();
+
+    // RED circle = physics body (collision circle, radius 10)
     this.debugGfx.lineStyle(1.5, 0xff0000, 0.9);
     this.debugGfx.strokeCircle(bx, by, radius);
 
-    // GREEN dot = foot bottom (body center + radius) - where the character visually "stands"
+    // GREEN dot = foot bottom (body center + radius)
     this.debugGfx.fillStyle(0x00ff00, 1);
     this.debugGfx.fillCircle(bx, by + radius, 3);
 
-    // YELLOW dot = body center
+    // YELLOW dot = body center (pathfinding navigates here)
     this.debugGfx.fillStyle(0xffff00, 1);
     this.debugGfx.fillCircle(bx, by, 2);
 
