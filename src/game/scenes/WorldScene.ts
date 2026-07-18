@@ -499,16 +499,19 @@ export class WorldScene extends Phaser.Scene {
     processLayers(tmjData.layers || [], false);
   }
 
-  private findSpawnPoint(map: Phaser.Tilemaps.Tilemap): { x: number; y: number } {
-    const spawnLayer = map.objects.find(l => l.name.toLowerCase() === 'spawns');
-    if (spawnLayer) {
-      const spawnObj = spawnLayer.objects.find((o) => {
-        const props: any[] = (o as any).properties || [];
-        const spawnId = props.find((p: any) => p.name === 'spawnId')?.value;
-        return spawnId === 'main_player_spawn' || o.name === 'main_player_spawn';
-      });
-      if (spawnObj && spawnObj.x !== undefined && spawnObj.y !== undefined) {
-        return { x: spawnObj.x, y: spawnObj.y };
+  private findSpawnPoint(_map: Phaser.Tilemaps.Tilemap): { x: number; y: number } {
+    const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
+    if (tmjData) {
+      const spawnObjects = this.findTMJObjectLayer(tmjData.layers, 'spawns');
+      if (spawnObjects) {
+        const spawnObj = spawnObjects.find((o: any) => {
+          const props: any[] = o.properties || [];
+          const spawnId = props.find((p: any) => p.name === 'spawnId')?.value;
+          return spawnId === 'main_player_spawn' || o.name === 'main_player_spawn';
+        });
+        if (spawnObj && spawnObj.x !== undefined && spawnObj.y !== undefined) {
+          return { x: spawnObj.x, y: spawnObj.y };
+        }
       }
     }
     return { x: 1273, y: 926 };
@@ -563,6 +566,18 @@ export class WorldScene extends Phaser.Scene {
         }
       }
     }
+  }
+
+  private findTMJObjectLayer(layers: any[], name: string): any[] | null {
+    for (const l of layers) {
+      if (l.type === 'group') {
+        const found = this.findTMJObjectLayer(l.layers || [], name);
+        if (found) return found;
+      } else if (l.type === 'objectgroup' && l.name === name) {
+        return l.objects || [];
+      }
+    }
+    return null;
   }
 
   private setupCollisionsFromTMJ() {
@@ -818,14 +833,14 @@ export class WorldScene extends Phaser.Scene {
 
     this.interactionSystem.loadFromTMJ(tmjData);
 
-    // Also keep old arenas array for BoardModal backwards compatibility
-    const ctLayer = _map.objects.find(l => l.name === 'chess_tables_interactions');
-    if (ctLayer) {
+    // Build arenas array from raw TMJ data (not Phaser's map.objects which may not flatten groups)
+    const ctObjects = this.findTMJObjectLayer(tmjData.layers, 'chess_tables_interactions');
+    if (ctObjects) {
       let arenaCount = 0;
-      for (const obj of ctLayer.objects) {
+      for (const obj of ctObjects) {
         const objName = obj.name || '';
         if (!objName.includes('_board')) continue;
-        const props: any[] = (obj as any).properties || [];
+        const props: any[] = obj.properties || [];
         const tableId = props.find((p: any) => p.name === 'tableId')?.value || '';
         const id = tableId || `arena_${arenaCount + 1}`;
         const title = objName;
@@ -836,6 +851,9 @@ export class WorldScene extends Phaser.Scene {
         this.arenas.push({ id, name: objName, title, x, y, width: w, height: h, zone: null as any });
         arenaCount++;
       }
+      console.log('[WorldScene] Arenas loaded from TMJ:', this.arenas.length);
+    } else {
+      console.warn('[WorldScene] chess_tables_interactions layer NOT found in TMJ!');
     }
   }
 
