@@ -130,24 +130,27 @@ export default class AStarGrid {
     mapWidth: number,
     mapHeight: number,
     rects: Rect[],
-    polys: Point[][]
+    polys: Point[][],
+    inflate: number = 0
   ): void {
     this.gridWidth = Math.ceil(mapWidth / this.cellSize);
     this.gridHeight = Math.ceil(mapHeight / this.cellSize);
     const totalCells = this.gridWidth * this.gridHeight;
     this.blocked = new Uint8Array(totalCells);
 
-    // Mark cells overlapping rectangles
+    const inflatePixels = inflate;
+
+    // Mark cells overlapping rectangles (inflated)
     for (const rect of rects) {
-      const minGX = Math.max(0, Math.floor(rect.x / this.cellSize));
-      const minGY = Math.max(0, Math.floor(rect.y / this.cellSize));
+      const minGX = Math.max(0, Math.floor((rect.x - inflatePixels) / this.cellSize));
+      const minGY = Math.max(0, Math.floor((rect.y - inflatePixels) / this.cellSize));
       const maxGX = Math.min(
         this.gridWidth - 1,
-        Math.floor((rect.x + rect.width - 1) / this.cellSize)
+        Math.floor((rect.x + rect.width + inflatePixels) / this.cellSize)
       );
       const maxGY = Math.min(
         this.gridHeight - 1,
-        Math.floor((rect.y + rect.height - 1) / this.cellSize)
+        Math.floor((rect.y + rect.height + inflatePixels) / this.cellSize)
       );
 
       for (let gy = minGY; gy <= maxGY; gy++) {
@@ -158,9 +161,9 @@ export default class AStarGrid {
       }
     }
 
-    // Mark cells overlapping polygons
+    // Mark cells overlapping polygons (inflated)
     for (const poly of polys) {
-      this.rasterizePolygon(poly);
+      this.rasterizePolygon(poly, inflatePixels);
     }
   }
 
@@ -202,9 +205,9 @@ export default class AStarGrid {
       endGY = nearest.y;
     }
 
-    // Trivial case
+    // Trivial case - same cell
     if (startGX === endGX && startGY === endGY) {
-      return [this.gridToWorld(startGX, startGY)];
+      return [{ x: startX, y: startY }, { x: endX, y: endY }];
     }
 
     // A* search
@@ -215,7 +218,23 @@ export default class AStarGrid {
     const smoothed = this.smoothPath(rawPath);
 
     // Convert to world coordinates
-    return smoothed.map((p) => this.gridToWorld(p.x, p.y));
+    const worldPath = smoothed.map((p) => this.gridToWorld(p.x, p.y));
+
+    // Replace first point with exact start position
+    if (worldPath.length > 0) {
+      worldPath[0] = { x: startX, y: startY };
+    }
+
+    // Replace last point with exact end position (if the original end cell wasn't blocked)
+    if (worldPath.length > 1) {
+      const targetGX = clampX(Math.floor(endX / this.cellSize));
+      const targetGY = clampY(Math.floor(endY / this.cellSize));
+      if (!this.isBlocked(targetGX, targetGY)) {
+        worldPath[worldPath.length - 1] = { x: endX, y: endY };
+      }
+    }
+
+    return worldPath;
   }
 
   // --- Private methods ---
@@ -499,10 +518,10 @@ export default class AStarGrid {
    * Rasterize a polygon into the blocked grid using scanline fill.
    * Polygon vertices are in world-space (absolute coordinates).
    */
-  private rasterizePolygon(vertices: Point[]): void {
+  private rasterizePolygon(vertices: Point[], inflate: number = 0): void {
     if (vertices.length < 3) return;
 
-    // Find bounding box in grid coords
+    // Find bounding box in world coords (inflated)
     let minX = Infinity,
       minY = Infinity,
       maxX = -Infinity,
@@ -515,29 +534,27 @@ export default class AStarGrid {
       if (v.y > maxY) maxY = v.y;
     }
 
-    const gMinX = Math.max(0, Math.floor(minX / this.cellSize));
-    const gMinY = Math.max(0, Math.floor(minY / this.cellSize));
-    const gMaxX = Math.min(this.gridWidth - 1, Math.floor(maxX / this.cellSize));
+    const gMinX = Math.max(0, Math.floor((minX - inflate) / this.cellSize));
+    const gMinY = Math.max(0, Math.floor((minY - inflate) / this.cellSize));
+    const gMaxX = Math.min(this.gridWidth - 1, Math.floor((maxX + inflate) / this.cellSize));
     const gMaxY = Math.min(
       this.gridHeight - 1,
-      Math.floor(maxY / this.cellSize)
+      Math.floor((maxY + inflate) / this.cellSize)
     );
 
-    // For each grid cell in the bounding box, check if cell overlaps polygon
+    // For each grid cell in the bounding box, check if cell overlaps polygon (with inflation)
     for (let gy = gMinY; gy <= gMaxY; gy++) {
       const cellCenterY = gy * this.cellSize + this.cellSize * 0.5;
       const rowOffset = gy * this.gridWidth;
 
       for (let gx = gMinX; gx <= gMaxX; gx++) {
-        if (this.blocked[rowOffset + gx] === 1) continue; // Already blocked
+        if (this.blocked[rowOffset + gx] === 1) continue;
 
         const cellCenterX = gx * this.cellSize + this.cellSize * 0.5;
 
-        // Check if cell center is inside polygon OR if any polygon edge
-        // intersects the cell rectangle
         if (
           this.pointInPolygon(cellCenterX, cellCenterY, vertices) ||
-          this.polygonIntersectsCell(gx, gy, vertices)
+          this.polygonIntersectsCell(gx, gy, vertices, inflate)
         ) {
           this.blocked[rowOffset + gx] = 1;
         }
@@ -575,12 +592,13 @@ export default class AStarGrid {
   private polygonIntersectsCell(
     gx: number,
     gy: number,
-    vertices: Point[]
+    vertices: Point[],
+    inflate: number = 0
   ): boolean {
-    const left = gx * this.cellSize;
-    const top = gy * this.cellSize;
-    const right = left + this.cellSize;
-    const bottom = top + this.cellSize;
+    const left = gx * this.cellSize - inflate;
+    const top = gy * this.cellSize - inflate;
+    const right = left + this.cellSize + inflate * 2;
+    const bottom = top + this.cellSize + inflate * 2;
 
     const n = vertices.length;
     for (let i = 0, j = n - 1; i < n; j = i++) {

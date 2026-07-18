@@ -64,6 +64,9 @@ export class WorldScene extends Phaser.Scene {
   private pathfinder!: AStarGrid;
   private collisionRects: { x: number; y: number; width: number; height: number }[] = [];
   private collisionPolys: { x: number; y: number }[][] = [];
+  private stuckFrames = 0;
+  private lastStuckPos: { x: number; y: number } | null = null;
+  private readonly STUCK_THRESHOLD = 30;
 
   // Zoom state
   private targetZoom = MAP_CONFIG.zoom.default;
@@ -327,7 +330,7 @@ export class WorldScene extends Phaser.Scene {
           y: obj.y + p.y,
         }));
         this.collisionPolys.push(absoluteVerts);
-        this.createPolygonBody(obj, labelData, label);
+        this.createPolygonBodies(absoluteVerts, labelData, label);
       } else if (obj.width && obj.height) {
         this.collisionRects.push({ x: obj.x, y: obj.y, width: obj.width, height: obj.height });
         this.createRectBody(obj, labelData, label);
@@ -358,89 +361,111 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
-  private createPolygonBody(obj: any, labelData: Record<string, string>, label: string) {
-    const polygon: { x: number; y: number }[] = obj.polygon;
-    if (!polygon || polygon.length < 3) return;
+  private createPolygonBodies(absoluteVerts: { x: number; y: number }[], labelData: Record<string, string>, label: string) {
+    if (absoluteVerts.length < 3) return;
 
-    // Convert relative vertices to absolute world coordinates
-    const absoluteVerts = polygon.map((p: { x: number; y: number }) => ({
-      x: obj.x + p.x,
-      y: obj.y + p.y,
-    }));
-
-    // Calculate centroid-relative vertices for Matter.js
-    const cx = absoluteVerts.reduce((s: number, v: { x: number }) => s + v.x, 0) / absoluteVerts.length;
-    const cy = absoluteVerts.reduce((s: number, v: { y: number }) => s + v.y, 0) / absoluteVerts.length;
-
-    // Pass vertices relative to the centroid - Matter expects this
-    const relativeVerts = absoluteVerts.map(v => ({
-      x: v.x - cx,
-      y: v.y - cy,
-    }));
+    // Convert to poly-decomp format [x, y][]
+    const poly = absoluteVerts.map(v => [v.x, v.y] as [number, number]);
 
     try {
-      const body = this.matter.add.fromVertices(cx, cy, [relativeVerts], {
-        isStatic: true,
-        label,
-        // @ts-ignore
-        customData: labelData,
-      });
+      decomp.makeCCW(poly);
+      decomp.removeCollinearPoints(poly, 0.01);
+      if (poly.length < 3) {
+        this.createConvexBody(absoluteVerts, labelData, label);
+        return;
+      }
 
-      if (body) {
-        // fromVertices may shift the body to the center of mass which differs from centroid.
-        // Correct position: calculate offset and apply.
-        const dx = cx - body.position.x;
-        const dy = cy - body.position.y;
-        this.matter.body.setPosition(body, {
-          x: body.position.x + dx,
-          y: body.position.y + dy,
-        });
-      } else {
-        this.createBBoxFallback(absoluteVerts, label, labelData);
+      const convexParts = decomp.quickDecomp(poly);
+      if (!convexParts || convexParts.length === 0) {
+        this.createConvexBody(absoluteVerts, labelData, label);
+        return;
+      }
+
+      for (let i = 0; i < convexParts.length; i++) {
+        const part = convexParts[i];
+        if (part.length < 3) continue;
+
+        const partVerts = part.map((p: number[]) => ({ x: p[0], y: p[1] }));
+        this.createConvexBody(partVerts, labelData, `${label}_p${i}`);
       }
     } catch (e) {
-      this.createBBoxFallback(absoluteVerts, label, labelData);
+      this.createConvexBody(absoluteVerts, labelData, label);
     }
   }
 
-  private createBBoxFallback(verts: { x: number; y: number }[], label: string, labelData: Record<string, string>) {
-    const xs = verts.map(v => v.x);
-    const ys = verts.map(v => v.y);
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-    const w = maxX - minX;
-    const h = maxY - minY;
-    if (w < 1 || h < 1) return;
-    this.matter.add.rectangle(minX + w / 2, minY + h / 2, w, h, {
+  private createConvexBody(verts: { x: number; y: number }[], labelData: Record<string, string>, label: string) {
+    if (verts.length < 3) return;
+
+    // Compute centroid
+    let cx = 0, cy = 0;
+    for (const v of verts) { cx += v.x; cy += v.y; }
+    cx /= verts.length;
+    cy /= verts.length;
+
+    // Make vertices relative to centroid for Matter.js
+    const relVerts = verts.map(v => ({ x: v.x - cx, y: v.y - cy }));
+
+    // For convex shapes, fromVertices works reliably: single part, no decomposition needed
+    const body = this.matter.add.fromVertices(cx, cy, [relVerts], {
       isStatic: true,
-      label: label + '_bbox',
+      label,
       // @ts-ignore
       customData: labelData,
     });
+
+    if (body) {
+      // Correct for center-of-mass offset: the body position should align the
+      // vertices to their intended absolute positions.
+      // After fromVertices, body.position is at the center of mass (which equals cx,cy
+      // for single convex parts). We need to verify vertex alignment.
+      // For single-part convex bodies, body.bounds gives us the actual bounds.
+      const actualCx = (body.bounds.min.x + body.bounds.max.x) / 2;
+      const actualCy = (body.bounds.min.y + body.bounds.max.y) / 2;
+
+      // Expected bounds center from our input vertices
+      const xs = verts.map(v => v.x);
+      const ys = verts.map(v => v.y);
+      const expectedCx = (Math.min(...xs) + Math.max(...xs)) / 2;
+      const expectedCy = (Math.min(...ys) + Math.max(...ys)) / 2;
+
+      const offsetX = expectedCx - actualCx;
+      const offsetY = expectedCy - actualCy;
+
+      if (Math.abs(offsetX) > 0.5 || Math.abs(offsetY) > 0.5) {
+        this.matter.body.setPosition(body, {
+          x: body.position.x + offsetX,
+          y: body.position.y + offsetY,
+        });
+      }
+    }
   }
 
   private buildPathfindingGrid(mapWidth: number, mapHeight: number) {
     this.pathfinder = new AStarGrid(16);
-    this.pathfinder.buildGrid(mapWidth, mapHeight, this.collisionRects, this.collisionPolys);
+    // Inflate obstacles by player body half-width (6px) to prevent wall-hugging paths
+    this.pathfinder.buildGrid(mapWidth, mapHeight, this.collisionRects, this.collisionPolys, 8);
   }
 
   private navigateTo(worldX: number, worldY: number) {
-    // Player body is at the feet position
     const startX = this.playerBody.position.x;
     const startY = this.playerBody.position.y;
+
+    this.stuckFrames = 0;
+    this.lastStuckPos = null;
 
     const waypoints = this.pathfinder.findPath(startX, startY, worldX, worldY);
     if (waypoints.length > 1) {
       this.pathWaypoints = waypoints;
+      // Replace last waypoint with exact click position if it's close enough
+      const lastWp = waypoints[waypoints.length - 1];
+      const dToClick = Math.hypot(lastWp.x - worldX, lastWp.y - worldY);
+      if (dToClick < 24) {
+        this.pathWaypoints[this.pathWaypoints.length - 1] = { x: worldX, y: worldY };
+      }
       this.currentWaypointIndex = 1;
       this.target = this.pathWaypoints[this.currentWaypointIndex];
-    } else if (waypoints.length === 1) {
-      this.pathWaypoints = [];
-      this.currentWaypointIndex = 0;
-      this.target = { x: worldX, y: worldY };
     } else {
+      // Direct movement to click point
       this.pathWaypoints = [];
       this.currentWaypointIndex = 0;
       this.target = { x: worldX, y: worldY };
@@ -562,11 +587,43 @@ export class WorldScene extends Phaser.Scene {
 
     const bx = this.playerBody.position.x;
     const by = this.playerBody.position.y;
+
+    // Stuck detection: if the player hasn't moved significantly, reroute or give up
+    if (this.lastStuckPos) {
+      const movedDist = Math.hypot(bx - this.lastStuckPos.x, by - this.lastStuckPos.y);
+      if (movedDist < 0.5) {
+        this.stuckFrames++;
+        if (this.stuckFrames >= this.STUCK_THRESHOLD) {
+          // Player is stuck - skip current waypoint or give up
+          if (this.pathWaypoints.length > 0 && this.currentWaypointIndex < this.pathWaypoints.length - 1) {
+            // Try skipping to the next waypoint
+            this.currentWaypointIndex++;
+            this.target = this.pathWaypoints[this.currentWaypointIndex];
+            this.stuckFrames = 0;
+          } else {
+            // Give up on this path
+            this.target = null;
+            this.pathWaypoints = [];
+            this.currentWaypointIndex = 0;
+            this.stuckFrames = 0;
+            this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
+            this.player.anims.stop();
+            this.player.setFrame(getIdleFrame(this.currentDirection));
+            this.emitMovement(false);
+            return;
+          }
+        }
+      } else {
+        this.stuckFrames = 0;
+      }
+    }
+    this.lastStuckPos = { x: bx, y: by };
+
     const dx = this.target.x - bx;
     const dy = this.target.y - by;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    const arrivalThreshold = 4;
+    const arrivalThreshold = 6;
     if (dist < arrivalThreshold) {
       // Advance to the next waypoint if available
       if (this.pathWaypoints.length > 0 && this.currentWaypointIndex < this.pathWaypoints.length - 1) {
