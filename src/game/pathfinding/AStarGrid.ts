@@ -187,14 +187,17 @@ export default class AStarGrid {
     const clampX = (v: number) => Math.max(0, Math.min(this.gridWidth - 1, v));
     const clampY = (v: number) => Math.max(0, Math.min(this.gridHeight - 1, v));
 
-    const startGX = clampX(sx);
-    const startGY = clampY(sy);
+    let startGX = clampX(sx);
+    let startGY = clampY(sy);
     let endGX = clampX(ex);
     let endGY = clampY(ey);
 
-    // If start is blocked, no path possible
+    // If start is blocked (player pushed into obstacle by physics), find nearest walkable
     if (this.isBlocked(startGX, startGY)) {
-      return [];
+      const nearestStart = this.findNearestUnblocked(startGX, startGY);
+      if (!nearestStart) return [];
+      startGX = nearestStart.x;
+      startGY = nearestStart.y;
     }
 
     // If end is blocked, find nearest unblocked cell

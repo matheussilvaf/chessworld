@@ -65,10 +65,13 @@ export class WorldScene extends Phaser.Scene {
   private pathfinder!: AStarGrid;
   private collisionRects: { x: number; y: number; width: number; height: number }[] = [];
   private collisionPolys: { x: number; y: number }[][] = [];
+
+  // Movement / pathfinding state
   private stuckFrames = 0;
   private lastStuckPos: { x: number; y: number } | null = null;
-  private readonly STUCK_THRESHOLD = 15;
-  private rerouting = false;
+  private readonly STUCK_THRESHOLD = 10;
+  private rerouteAttempts = 0;
+  private readonly MAX_REROUTE_ATTEMPTS = 3;
   private finalDestination: { x: number; y: number } | null = null;
 
   // Zoom state
@@ -616,29 +619,31 @@ export class WorldScene extends Phaser.Scene {
     const startX = this.playerBody.position.x;
     const startY = this.playerBody.position.y;
 
+    // Cancel any previous movement
     this.stuckFrames = 0;
     this.lastStuckPos = null;
-    this.rerouting = false;
+    this.rerouteAttempts = 0;
     this.finalDestination = { x: worldX, y: worldY };
 
     const waypoints = this.pathfinder.findPath(startX, startY, worldX, worldY);
-    if (waypoints.length > 1) {
+    if (waypoints.length >= 2) {
       this.pathWaypoints = waypoints;
-      // Always use exact click position as final waypoint
-      this.pathWaypoints[this.pathWaypoints.length - 1] = { x: worldX, y: worldY };
       this.currentWaypointIndex = 1;
       this.target = this.pathWaypoints[this.currentWaypointIndex];
     } else {
-      // Direct movement - no obstacles in the way
-      this.pathWaypoints = [{ x: startX, y: startY }, { x: worldX, y: worldY }];
-      this.currentWaypointIndex = 1;
-      this.target = { x: worldX, y: worldY };
+      // No valid path - stop cleanly
+      this.stopMovement();
     }
   }
 
   private reroute() {
-    if (!this.finalDestination || this.rerouting) return;
-    this.rerouting = true;
+    if (!this.finalDestination) return;
+
+    this.rerouteAttempts++;
+    if (this.rerouteAttempts > this.MAX_REROUTE_ATTEMPTS) {
+      this.stopMovement();
+      return;
+    }
 
     const startX = this.playerBody.position.x;
     const startY = this.playerBody.position.y;
@@ -646,18 +651,15 @@ export class WorldScene extends Phaser.Scene {
     const endY = this.finalDestination.y;
 
     const waypoints = this.pathfinder.findPath(startX, startY, endX, endY);
-    if (waypoints.length > 1) {
+    if (waypoints.length >= 2) {
       this.pathWaypoints = waypoints;
-      this.pathWaypoints[this.pathWaypoints.length - 1] = { x: endX, y: endY };
       this.currentWaypointIndex = 1;
       this.target = this.pathWaypoints[this.currentWaypointIndex];
       this.stuckFrames = 0;
       this.lastStuckPos = null;
     } else {
-      // Cannot find a path - stop moving
       this.stopMovement();
     }
-    this.rerouting = false;
   }
 
   private stopMovement() {
@@ -667,6 +669,7 @@ export class WorldScene extends Phaser.Scene {
     this.finalDestination = null;
     this.stuckFrames = 0;
     this.lastStuckPos = null;
+    this.rerouteAttempts = 0;
     this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
     this.player.anims.stop();
     this.player.setFrame(getIdleFrame(this.currentDirection));
@@ -784,13 +787,12 @@ export class WorldScene extends Phaser.Scene {
     const bx = this.playerBody.position.x;
     const by = this.playerBody.position.y;
 
-    // Stuck detection: if the player hasn't moved, reroute around obstacle
+    // Stuck detection: if the player hasn't moved significantly, reroute
     if (this.lastStuckPos) {
       const movedDist = Math.hypot(bx - this.lastStuckPos.x, by - this.lastStuckPos.y);
-      if (movedDist < 0.3) {
+      if (movedDist < 0.5) {
         this.stuckFrames++;
         if (this.stuckFrames >= this.STUCK_THRESHOLD) {
-          // Player is stuck against a wall - try to reroute from current position
           this.stuckFrames = 0;
           this.lastStuckPos = null;
           this.reroute();
@@ -798,26 +800,32 @@ export class WorldScene extends Phaser.Scene {
         }
       } else {
         this.stuckFrames = 0;
+        this.rerouteAttempts = 0;
       }
     }
     this.lastStuckPos = { x: bx, y: by };
 
+    // Distance to current waypoint
     const dx = this.target.x - bx;
     const dy = this.target.y - by;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    const arrivalThreshold = 4;
+    // Check if we've arrived at the current waypoint
+    const isLastWaypoint = this.currentWaypointIndex >= this.pathWaypoints.length - 1;
+    const arrivalThreshold = isLastWaypoint ? this.playerSpeed * 1.5 : this.playerSpeed * 2.5;
+
     if (dist < arrivalThreshold) {
-      // Advance to the next waypoint if available
-      if (this.pathWaypoints.length > 0 && this.currentWaypointIndex < this.pathWaypoints.length - 1) {
+      if (!isLastWaypoint) {
+        // Advance to next waypoint
         this.currentWaypointIndex++;
         this.target = this.pathWaypoints[this.currentWaypointIndex];
       } else {
-        // Reached final destination
+        // Reached final destination - stop cleanly
         this.target = null;
         this.pathWaypoints = [];
         this.currentWaypointIndex = 0;
         this.finalDestination = null;
+        this.rerouteAttempts = 0;
         this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
         this.player.anims.stop();
         this.player.setFrame(getIdleFrame(this.currentDirection));
@@ -827,20 +835,25 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // Move towards current target
+    // Calculate velocity towards current waypoint
     const tdx = this.target.x - bx;
     const tdy = this.target.y - by;
     const tdist = Math.sqrt(tdx * tdx + tdy * tdy);
     if (tdist < 0.1) return;
 
-    const vx = (tdx / tdist) * this.playerSpeed;
-    const vy = (tdy / tdist) * this.playerSpeed;
+    // Decelerate when approaching the final destination
+    let speed = this.playerSpeed;
+    if (isLastWaypoint && tdist < this.playerSpeed * 4) {
+      speed = Math.max(0.8, this.playerSpeed * (tdist / (this.playerSpeed * 4)));
+    }
+
+    const vx = (tdx / tdist) * speed;
+    const vy = (tdy / tdist) * speed;
     this.matter.body.setVelocity(this.playerBody, { x: vx, y: vy });
 
     const dir = this.getDirection8(tdx, tdy);
     this.currentDirection = dir;
     this.player.anims.play(getAnimKey(dir), true);
-    // Scale animation speed proportionally to movement speed (base: speed=3, frameRate=9)
     const animSpeed = this.playerSpeed / MAP_CONFIG.playerSpeed;
     this.player.anims.timeScale = animSpeed;
 
