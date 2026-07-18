@@ -51,6 +51,10 @@ export class WorldScene extends Phaser.Scene {
   private currentWaypointIndex = 0;
   private arenas: ChessArenaZone[] = [];
   private otherPlayers: Map<string, RemotePlayer> = new Map();
+
+  // Debug graphics
+  private debugGfx!: Phaser.GameObjects.Graphics;
+  private clickMarker: { x: number; y: number } | null = null;
   private localPlayerId: string = '';
 
   private lastSentTime = 0;
@@ -182,6 +186,10 @@ export class WorldScene extends Phaser.Scene {
     this.createPlayer(spawnPoint.x, spawnPoint.y);
     this.createAnimations();
 
+    // Debug graphics overlay
+    this.debugGfx = this.add.graphics();
+    this.debugGfx.setDepth(999);
+
     // Camera — manual pixel-perfect follow
     // No startFollow: Phaser's preRender would overwrite our snapped scroll with fractional values
     this.cameras.main.setZoom(this.defaultZoom);
@@ -274,6 +282,9 @@ export class WorldScene extends Phaser.Scene {
     this.player.x = Math.floor(this.playerBody.position.x);
     this.player.y = Math.floor(this.playerBody.position.y - this.playerFeetOffset);
 
+    // Debug visualization
+    this.drawDebug();
+
     // Update camera target from final player position
     if (this.cameraFollowing) {
       this.cameraTargetX = this.player.x;
@@ -289,6 +300,56 @@ export class WorldScene extends Phaser.Scene {
       remote.container.x = Math.floor(pos.x);
       remote.container.y = Math.floor(pos.y);
     });
+  }
+
+  private drawDebug() {
+    this.debugGfx.clear();
+    const bx = this.playerBody.position.x;
+    const by = this.playerBody.position.y;
+    const radius = 10;
+
+    // RED circle = physics body (collision circle)
+    this.debugGfx.lineStyle(1.5, 0xff0000, 0.9);
+    this.debugGfx.strokeCircle(bx, by, radius);
+
+    // GREEN dot = foot bottom (body center + radius) - where the character visually "stands"
+    this.debugGfx.fillStyle(0x00ff00, 1);
+    this.debugGfx.fillCircle(bx, by + radius, 3);
+
+    // YELLOW dot = body center
+    this.debugGfx.fillStyle(0xffff00, 1);
+    this.debugGfx.fillCircle(bx, by, 2);
+
+    // BLUE cross = click position (where user clicked)
+    if (this.clickMarker) {
+      this.debugGfx.lineStyle(2, 0x0088ff, 1);
+      const cx = this.clickMarker.x;
+      const cy = this.clickMarker.y;
+      this.debugGfx.strokeCircle(cx, cy, 5);
+      this.debugGfx.beginPath();
+      this.debugGfx.moveTo(cx - 7, cy);
+      this.debugGfx.lineTo(cx + 7, cy);
+      this.debugGfx.moveTo(cx, cy - 7);
+      this.debugGfx.lineTo(cx, cy + 7);
+      this.debugGfx.strokePath();
+    }
+
+    // MAGENTA path = remaining waypoints
+    if (this.pathWaypoints.length > 0 && this.currentWaypointIndex < this.pathWaypoints.length) {
+      this.debugGfx.lineStyle(1, 0xff00ff, 0.7);
+      this.debugGfx.beginPath();
+      this.debugGfx.moveTo(bx, by);
+      for (let i = this.currentWaypointIndex; i < this.pathWaypoints.length; i++) {
+        this.debugGfx.lineTo(this.pathWaypoints[i].x, this.pathWaypoints[i].y);
+      }
+      this.debugGfx.strokePath();
+
+      // Orange dot = current target waypoint
+      if (this.target) {
+        this.debugGfx.fillStyle(0xff8800, 1);
+        this.debugGfx.fillCircle(this.target.x, this.target.y, 3);
+      }
+    }
   }
 
   private setupZoom() {
@@ -618,6 +679,9 @@ export class WorldScene extends Phaser.Scene {
   private navigateTo(worldX: number, worldY: number) {
     const startX = this.playerBody.position.x;
     const startY = this.playerBody.position.y;
+
+    // Store click position for debug visualization
+    this.clickMarker = { x: worldX, y: worldY };
 
     // Cancel any previous movement
     this.stuckFrames = 0;
