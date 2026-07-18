@@ -1408,10 +1408,15 @@ export class WorldScene extends Phaser.Scene {
     this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
 
     // Disable collisions so body can pass through obstacles to reach seat
-    this.savedCollisionFilter = { ...this.playerBody.collisionFilter };
+    if (!this.savedCollisionFilter) {
+      this.savedCollisionFilter = { ...this.playerBody.collisionFilter };
+    }
     this.matter.body.set(this.playerBody, {
       collisionFilter: { group: -1, category: 0, mask: 0 },
     } as any);
+
+    // Kill any existing seat tween
+    this.tweens.killTweensOf(this.playerBody.position);
 
     // Anchor coords are sprite world positions - convert to body position
     const targetBodyX = anchor.x + this.playerFeetOffsetX;
@@ -1461,6 +1466,9 @@ export class WorldScene extends Phaser.Scene {
     this.currentSeatInfo = null;
 
     console.log('[WorldScene] unseatPlayer:', tableId, role, seat);
+
+    // Kill any existing seat tween
+    this.tweens.killTweensOf(this.playerBody.position);
 
     if (anchors) {
       const exit = getExitAnchor(anchors, role, seat);
