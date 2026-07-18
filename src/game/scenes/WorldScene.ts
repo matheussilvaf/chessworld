@@ -9,6 +9,7 @@ import {
   Direction8,
 } from '../characters/characterCatalog';
 import { RemotePlayerInterpolator } from '../network/interpolation';
+import AStarGrid from '../pathfinding/AStarGrid';
 
 interface ChessArenaZone {
   id: string;
@@ -46,6 +47,8 @@ export class WorldScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Sprite;
   private playerBody!: MatterJS.BodyType;
   private target: { x: number; y: number } | null = null;
+  private pathWaypoints: { x: number; y: number }[] = [];
+  private currentWaypointIndex = 0;
   private arenas: ChessArenaZone[] = [];
   private otherPlayers: Map<string, RemotePlayer> = new Map();
   private localPlayerId: string = '';
@@ -58,6 +61,9 @@ export class WorldScene extends Phaser.Scene {
   private movementSender: MovementSender | null = null;
   private currentDirection: Direction8 = 'down';
   private playerSpeed = MAP_CONFIG.playerSpeed;
+  private pathfinder!: AStarGrid;
+  private collisionRects: { x: number; y: number; width: number; height: number }[] = [];
+  private collisionPolys: { x: number; y: number }[][] = [];
 
   // Zoom state
   private targetZoom = MAP_CONFIG.zoom.default;
@@ -151,12 +157,15 @@ export class WorldScene extends Phaser.Scene {
     this.cameras.main.setZoom(this.defaultZoom);
     this.cameras.main.setRoundPixels(true);
 
-    // Click-to-move
+    // Build pathfinding grid
+    this.buildPathfindingGrid(map.widthInPixels, map.heightInPixels);
+
+    // Click-to-move with pathfinding
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (this.movementLocked) return;
       if (this.isPinching) return;
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-      this.target = { x: worldPoint.x, y: worldPoint.y };
+      this.navigateTo(worldPoint.x, worldPoint.y);
     });
 
     // Setup zoom controls
@@ -180,7 +189,7 @@ export class WorldScene extends Phaser.Scene {
     // Mobile: pinch-to-zoom
     this.input.addPointer(1); // enable 2nd pointer for multi-touch
 
-    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+    this.input.on('pointerdown', () => {
       if (this.input.pointer1.isDown && this.input.pointer2.isDown) {
         this.isPinching = true;
         const p1 = this.input.pointer1;
@@ -216,7 +225,7 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
-  private renderTileObjects(map: Phaser.Tilemaps.Tilemap, logicalSet: Set<string>) {
+  private renderTileObjects(_map: Phaser.Tilemaps.Tilemap, logicalSet: Set<string>) {
     const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
     if (!tmjData) return;
 
@@ -242,7 +251,7 @@ export class WorldScene extends Phaser.Scene {
 
           const sprite = this.add.sprite(obj.x, obj.y, tsDef.textureKey);
           sprite.setOrigin(0, 1); // Tiled tile objects have origin at bottom-left
-          sprite.setDisplaySize(obj.width || tsDef.tileWidth, obj.height || tsDef.tileHeight);
+          sprite.setDisplaySize(obj.width || 32, obj.height || 32);
           sprite.setDepth(isAbove ? 200 : (obj.y || 0));
 
           // Handle flip flags encoded in GID
@@ -313,8 +322,14 @@ export class WorldScene extends Phaser.Scene {
       const label = obj.name || `collision_${obj.id}`;
 
       if (obj.polygon) {
+        const absoluteVerts = obj.polygon.map((p: { x: number; y: number }) => ({
+          x: obj.x + p.x,
+          y: obj.y + p.y,
+        }));
+        this.collisionPolys.push(absoluteVerts);
         this.createPolygonBody(obj, labelData, label);
       } else if (obj.width && obj.height) {
+        this.collisionRects.push({ x: obj.x, y: obj.y, width: obj.width, height: obj.height });
         this.createRectBody(obj, labelData, label);
       }
     }
@@ -353,19 +368,34 @@ export class WorldScene extends Phaser.Scene {
       y: obj.y + p.y,
     }));
 
-    // Calculate the centroid in world space
+    // Calculate centroid-relative vertices for Matter.js
     const cx = absoluteVerts.reduce((s: number, v: { x: number }) => s + v.x, 0) / absoluteVerts.length;
     const cy = absoluteVerts.reduce((s: number, v: { y: number }) => s + v.y, 0) / absoluteVerts.length;
 
+    // Pass vertices relative to the centroid - Matter expects this
+    const relativeVerts = absoluteVerts.map(v => ({
+      x: v.x - cx,
+      y: v.y - cy,
+    }));
+
     try {
-      const body = this.matter.add.fromVertices(cx, cy, [absoluteVerts], {
+      const body = this.matter.add.fromVertices(cx, cy, [relativeVerts], {
         isStatic: true,
         label,
         // @ts-ignore
         customData: labelData,
       });
 
-      if (!body) {
+      if (body) {
+        // fromVertices may shift the body to the center of mass which differs from centroid.
+        // Correct position: calculate offset and apply.
+        const dx = cx - body.position.x;
+        const dy = cy - body.position.y;
+        this.matter.body.setPosition(body, {
+          x: body.position.x + dx,
+          y: body.position.y + dy,
+        });
+      } else {
         this.createBBoxFallback(absoluteVerts, label, labelData);
       }
     } catch (e) {
@@ -389,6 +419,32 @@ export class WorldScene extends Phaser.Scene {
       // @ts-ignore
       customData: labelData,
     });
+  }
+
+  private buildPathfindingGrid(mapWidth: number, mapHeight: number) {
+    this.pathfinder = new AStarGrid(16);
+    this.pathfinder.buildGrid(mapWidth, mapHeight, this.collisionRects, this.collisionPolys);
+  }
+
+  private navigateTo(worldX: number, worldY: number) {
+    // Player body is at the feet position
+    const startX = this.playerBody.position.x;
+    const startY = this.playerBody.position.y;
+
+    const waypoints = this.pathfinder.findPath(startX, startY, worldX, worldY);
+    if (waypoints.length > 1) {
+      this.pathWaypoints = waypoints;
+      this.currentWaypointIndex = 1;
+      this.target = this.pathWaypoints[this.currentWaypointIndex];
+    } else if (waypoints.length === 1) {
+      this.pathWaypoints = [];
+      this.currentWaypointIndex = 0;
+      this.target = { x: worldX, y: worldY };
+    } else {
+      this.pathWaypoints = [];
+      this.currentWaypointIndex = 0;
+      this.target = { x: worldX, y: worldY };
+    }
   }
 
   private setupInteractives(map: Phaser.Tilemaps.Tilemap) {
@@ -430,14 +486,25 @@ export class WorldScene extends Phaser.Scene {
     this.player.setOrigin(charDef.originX, charDef.originY);
     this.player.setDepth(100);
 
+    // Body sized to match the visible character, not the full frame.
+    // The visible character within a 104x104 frame is approximately 30px wide and 50px tall.
+    // At 0.45 scale that's ~13.5px x 22.5px. We use a small rect at the feet area for collisions.
+    const bodyW = 12;
+    const bodyH = 8;
+    // Body sits at the character's feet. Offset from sprite origin.
+    // With originY 0.82, the feet are at ~82% of the rendered height.
+    // The body should be at the world position of the feet.
+    const feetOffsetY = 4; // Small offset below the sprite draw position to align with feet
+
     this.playerBody = this.matter.add.rectangle(
-      x, y + charDef.bodyOffsetY,
-      charDef.bodyWidth, charDef.bodyHeight,
+      x, y + feetOffsetY,
+      bodyW, bodyH,
       {
         label: 'player',
         friction: 0,
         frictionAir: 0.15,
         frictionStatic: 0,
+        chamfer: { radius: 3 },
       }
     );
     this.matter.body.setInertia(this.playerBody, Infinity);
@@ -469,7 +536,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.player.x = this.playerBody.position.x;
-    this.player.y = this.playerBody.position.y - getCharacter().bodyOffsetY;
+    this.player.y = this.playerBody.position.y - 4;
 
     this.otherPlayers.forEach((remote) => {
       const pos = remote.interpolator.getPosition();
@@ -499,21 +566,37 @@ export class WorldScene extends Phaser.Scene {
     const dy = this.target.y - by;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    if (dist < 6) {
-      this.target = null;
-      this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
-      this.player.anims.stop();
-      this.player.setFrame(getIdleFrame(this.currentDirection));
-      this.emitMovement(false);
-      if (this.onPositionUpdate) this.onPositionUpdate(this.player.x, this.player.y);
-      return;
+    const arrivalThreshold = 4;
+    if (dist < arrivalThreshold) {
+      // Advance to the next waypoint if available
+      if (this.pathWaypoints.length > 0 && this.currentWaypointIndex < this.pathWaypoints.length - 1) {
+        this.currentWaypointIndex++;
+        this.target = this.pathWaypoints[this.currentWaypointIndex];
+      } else {
+        // Reached final destination
+        this.target = null;
+        this.pathWaypoints = [];
+        this.currentWaypointIndex = 0;
+        this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
+        this.player.anims.stop();
+        this.player.setFrame(getIdleFrame(this.currentDirection));
+        this.emitMovement(false);
+        if (this.onPositionUpdate) this.onPositionUpdate(this.player.x, this.player.y);
+        return;
+      }
     }
 
-    const vx = (dx / dist) * this.playerSpeed;
-    const vy = (dy / dist) * this.playerSpeed;
+    // Move towards current target
+    const tdx = this.target.x - bx;
+    const tdy = this.target.y - by;
+    const tdist = Math.sqrt(tdx * tdx + tdy * tdy);
+    if (tdist < 0.1) return;
+
+    const vx = (tdx / tdist) * this.playerSpeed;
+    const vy = (tdy / tdist) * this.playerSpeed;
     this.matter.body.setVelocity(this.playerBody, { x: vx, y: vy });
 
-    const dir = this.getDirection8(dx, dy);
+    const dir = this.getDirection8(tdx, tdy);
     this.currentDirection = dir;
     this.player.anims.play(getAnimKey(dir), true);
 
@@ -723,6 +806,8 @@ export class WorldScene extends Phaser.Scene {
 
     this.movementLocked = true;
     this.target = null;
+    this.pathWaypoints = [];
+    this.currentWaypointIndex = 0;
     this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
 
     this.tweens.add({
@@ -733,7 +818,7 @@ export class WorldScene extends Phaser.Scene {
       ease: 'Power2',
       onUpdate: () => {
         this.player.x = this.playerBody.position.x;
-        this.player.y = this.playerBody.position.y - getCharacter().bodyOffsetY;
+        this.player.y = this.playerBody.position.y - 4;
       },
       onComplete: () => {
         this.currentDirection = side === 'left' ? 'right' : 'left';
@@ -750,6 +835,8 @@ export class WorldScene extends Phaser.Scene {
   public lockMovement(arenaId?: string) {
     this.movementLocked = true;
     this.target = null;
+    this.pathWaypoints = [];
+    this.currentWaypointIndex = 0;
     this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
     this.player.anims.stop();
     this.player.setFrame(getIdleFrame(this.currentDirection));
