@@ -287,10 +287,13 @@ export class WorldScene extends Phaser.Scene {
     // Debug visualization
     this.drawDebug();
 
-    // Update camera target from final player position
+    // Update camera target from final player position with smooth lerp.
+    // Higher lerp while moving for responsive tracking; lower when stopped for smooth coast.
     if (this.cameraFollowing) {
-      this.cameraTargetX = this.player.x;
-      this.cameraTargetY = this.player.y;
+      const isMoving = this.target !== null;
+      const lerpSpeed = isMoving ? 0.12 : 0.06;
+      this.cameraTargetX += (this.player.x - this.cameraTargetX) * lerpSpeed;
+      this.cameraTargetY += (this.player.y - this.cameraTargetY) * lerpSpeed;
     }
 
     // Final pixel-perfect camera snap (last thing before render)
@@ -903,13 +906,7 @@ export class WorldScene extends Phaser.Scene {
         this.currentWaypointIndex++;
         this.target = this.pathWaypoints[this.currentWaypointIndex];
       } else {
-        // Reached final destination - snap body to exact target and stop
-        if (this.finalDestination) {
-          this.matter.body.setPosition(this.playerBody, {
-            x: this.finalDestination.x,
-            y: this.finalDestination.y,
-          });
-        }
+        // Reached final destination - stop naturally (no snap to avoid collision bypass)
         this.target = null;
         this.pathWaypoints = [];
         this.currentWaypointIndex = 0;
@@ -918,9 +915,6 @@ export class WorldScene extends Phaser.Scene {
         this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
         this.player.anims.stop();
         this.player.setFrame(getIdleFrame(this.currentDirection));
-        // Update sprite position from snapped body
-        this.player.x = Math.floor(this.playerBody.position.x - this.playerFeetOffsetX);
-        this.player.y = Math.floor(this.playerBody.position.y - this.playerFeetOffset);
         this.emitMovement(false);
         if (this.onPositionUpdate) this.onPositionUpdate(this.player.x, this.player.y);
         return;
