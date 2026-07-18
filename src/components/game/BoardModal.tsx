@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useAuthStore } from '../../stores/authStore';
 import { sendCreateChallenge, sendAcceptChallenge, sendBoardCancel } from '../../game/network/colyseusClient';
@@ -48,16 +48,7 @@ export function BoardModal() {
   const [selectedSide, setSelectedSide] = useState<'w' | 'b' | 'random'>(
     (selectedBoard as any)?.preSelectedSide || 'random'
   );
-  const [isWaiting, setIsWaiting] = useState(false);
-
-  useEffect(() => {
-    if (selectedBoard && colyseusBoards.length) {
-      const bs = colyseusBoards.find(b => b.id === selectedBoard.id);
-      if (bs?.status === 'waiting' && bs.waitingPlayerId === user?.id) {
-        setIsWaiting(true);
-      }
-    }
-  }, [selectedBoard, colyseusBoards, user]);
+  const [submitting, setSubmitting] = useState(false);
 
   if (!selectedBoard) return null;
 
@@ -65,10 +56,12 @@ export function BoardModal() {
   const colyseusStatus = boardState?.status || 'idle';
   const isWaitingOnServer = colyseusStatus === 'waiting';
   const isPlaying = colyseusStatus === 'playing';
-  const waitingPlayerIsMe = boardState?.waitingPlayerId === user?.id;
+  const waitingPlayerIsMe = isWaitingOnServer && boardState?.waitingPlayerId === user?.id;
 
   const handleCreateChallenge = () => {
-    if (!user) return;
+    if (!user || submitting) return;
+    if (colyseusStatus !== 'idle') return;
+    setSubmitting(true);
     sendCreateChallenge({
       boardId: selectedBoard.id,
       timeCategory: selectedTime.category,
@@ -77,7 +70,7 @@ export function BoardModal() {
       timeLabel: selectedTime.label,
       side: selectedSide,
     });
-    setIsWaiting(true);
+    setTimeout(() => setSubmitting(false), 2000);
   };
 
   const handleAcceptChallenge = () => {
@@ -90,21 +83,20 @@ export function BoardModal() {
   const handleCancelWaiting = () => {
     if (!selectedBoard) return;
     sendBoardCancel(selectedBoard.id);
-    setIsWaiting(false);
     setBoardLocked(false);
     setSelectedBoard(null);
     setChallengeColor(null);
   };
 
   const handleClose = () => {
-    if (!isWaiting) {
+    if (!waitingPlayerIsMe) {
       setBoardLocked(false);
       setSelectedBoard(null);
     }
   };
 
-  // Waiting state
-  if (isWaiting || (isWaitingOnServer && waitingPlayerIsMe)) {
+  // I am the one waiting on the server
+  if (waitingPlayerIsMe) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
         <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-sm overflow-hidden shadow-2xl">
@@ -114,7 +106,7 @@ export function BoardModal() {
             </div>
             <h3 className="text-white font-bold text-lg mb-1">Waiting for duel...</h3>
             <p className="text-slate-400 text-sm mb-1">
-              {selectedTime.label} | {selectedBoard.name?.replace(/_/g, ' ')}
+              {boardState?.timeLabel || selectedTime.label} | {selectedBoard.name?.replace(/_/g, ' ')}
             </p>
             {challengeColor && (
               <p className="text-slate-500 text-xs mb-1">
@@ -228,7 +220,7 @@ export function BoardModal() {
     );
   }
 
-  // Default: Time control + side selection
+  // Default: Time control + side selection (only when board is idle)
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
       <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-sm overflow-hidden shadow-2xl">
@@ -306,9 +298,10 @@ export function BoardModal() {
 
           <button
             onClick={handleCreateChallenge}
-            className="w-full py-3 rounded-xl font-semibold transition-all bg-gradient-to-r from-amber-500 to-amber-600 text-white hover:from-amber-600 hover:to-amber-700 shadow-lg shadow-amber-500/20 mt-2"
+            disabled={submitting || colyseusStatus !== 'idle'}
+            className="w-full py-3 rounded-xl font-semibold transition-all bg-gradient-to-r from-amber-500 to-amber-600 text-white hover:from-amber-600 hover:to-amber-700 shadow-lg shadow-amber-500/20 mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Launch Challenge
+            {submitting ? 'Launching...' : 'Launch Challenge'}
           </button>
         </div>
       </div>
