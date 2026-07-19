@@ -59,7 +59,8 @@ const LIGHT_SQ = '#f0d9b5';
 const DARK_SQ = '#b58863';
 const SELECTED_SQ = '#829769';
 const VALID_MOVE_DOT = 'rgba(100, 111, 64, 0.7)';
-const LAST_MOVE_SQ = 'rgba(205, 210, 106, 0.5)';
+const LAST_MOVE_LIGHT = '#f5f682';
+const LAST_MOVE_DARK = '#baca44';
 
 interface ScreenRect {
   x: number;
@@ -297,7 +298,7 @@ export function ChessBoardOverlay() {
 
               let bgColor = isLight ? LIGHT_SQ : DARK_SQ;
               if (isSelected) bgColor = SELECTED_SQ;
-              else if (isLastMoveFrom || isLastMoveTo) bgColor = LAST_MOVE_SQ;
+              else if (isLastMoveFrom || isLastMoveTo) bgColor = isLight ? LAST_MOVE_LIGHT : LAST_MOVE_DARK;
 
               return (
                 <div

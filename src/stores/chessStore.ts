@@ -99,6 +99,8 @@ export const useChessStore = create<ChessState>((set, get) => ({
       blackPlayerId: matchData?.blackPlayerId || '',
       selectedSquare: null,
       validMoves: [],
+      lastMove: null,
+      showBoard: true,
     });
   },
 
