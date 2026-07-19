@@ -357,7 +357,7 @@ export function GameCanvas() {
         if (worldScene && data.boardId) {
           // Seat at correct side: white=bottom, black=top
           const seat = data.color === 'w' ? 'bottom' : 'top';
-          worldScene.seatPlayer(data.boardId, 'player', seat);
+          worldScene.seatPlayer(data.boardId, 'player', seat, data.color);
           // Show initial position and activate interactive overlay
           const initialFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
           worldScene.updateBoardFEN(data.boardId, initialFen);

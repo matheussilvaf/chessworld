@@ -1143,8 +1143,23 @@ export class WorldScene extends Phaser.Scene {
     remote.seatedBoardId = tableId;
     remote.isMoving = false;
     remote.sprite.anims.stop();
-    const sittingTexture = seat === 'bottom' ? 'sitting-north' : 'sitting-south';
-    remote.sprite.setTexture(sittingTexture);
+
+    // Check if local camera is rotated 180° (local player is Black)
+    const localCameraRotated = this.targetRotation === Math.PI;
+
+    if (localCameraRotated) {
+      // From Black's view: opponent (White, bottom) should appear as south.png right-side-up
+      // Rotate sprite 180° to counteract camera rotation
+      const sittingTexture = seat === 'bottom' ? 'sitting-south' : 'sitting-north';
+      remote.sprite.setTexture(sittingTexture);
+      remote.sprite.setRotation(Math.PI);
+    } else {
+      // From White/spectator view: bottom=north, top=south (normal)
+      const sittingTexture = seat === 'bottom' ? 'sitting-north' : 'sitting-south';
+      remote.sprite.setTexture(sittingTexture);
+      remote.sprite.setRotation(0);
+    }
+
     remote.sprite.setFrame(0);
     remote.container.setPosition(anchor.x, anchor.y);
     remote.interpolator.pushSnapshot(anchor.x, anchor.y);
@@ -1160,6 +1175,7 @@ export class WorldScene extends Phaser.Scene {
     remote.seatedBoardId = '';
     const charDef = getCharacter();
     remote.sprite.setTexture(charDef.id);
+    remote.sprite.setRotation(0);
     remote.sprite.setFrame(getIdleFrame(remote.direction));
   }
 
@@ -1170,6 +1186,7 @@ export class WorldScene extends Phaser.Scene {
         remote.seatedBoardId = '';
         const charDef = getCharacter();
         remote.sprite.setTexture(charDef.id);
+        remote.sprite.setRotation(0);
         remote.sprite.setFrame(getIdleFrame(remote.direction));
       }
     }
@@ -1447,7 +1464,7 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  public seatPlayer(tableId: string, role: 'player' | 'spectator', seat: string) {
+  public seatPlayer(tableId: string, role: 'player' | 'spectator', seat: string, playerColor?: 'w' | 'b') {
     const anchors = this.tableRegistry?.tables.get(tableId);
     if (!anchors || !this.player) {
       console.warn('[WorldScene] seatPlayer: no anchors for', tableId);
@@ -1513,9 +1530,15 @@ export class WorldScene extends Phaser.Scene {
         this.player.y = Math.round(anchor.y);
         this.currentDirection = anchor.direction as any;
         this.player.anims.stop();
-        // Swap to sitting texture: bottom seat (White) = north, top seat (Black) = south
-        const sittingTexture = seat === 'bottom' ? 'sitting-north' : 'sitting-south';
-        this.player.setTexture(sittingTexture);
+        // For Black (camera 180°): use north.png + rotate sprite 180° to counteract camera
+        // For White (camera 0°): use north.png normally
+        if (playerColor === 'b') {
+          this.player.setTexture('sitting-north');
+          this.player.setRotation(Math.PI);
+        } else {
+          this.player.setTexture('sitting-north');
+          this.player.setRotation(0);
+        }
         this.player.setFrame(0);
         this.seatTween = null;
         // Broadcast final seated position
@@ -1561,6 +1584,7 @@ export class WorldScene extends Phaser.Scene {
       // Restore walking spritesheet before exit animation
       const charDef = getCharacter();
       this.player.setTexture(charDef.id);
+      this.player.setRotation(0);
       this.player.setFrame(getIdleFrame(this.currentDirection));
 
       const exit = getExitAnchor(anchors, role, seat);
