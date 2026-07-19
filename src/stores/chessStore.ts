@@ -172,11 +172,23 @@ export const useChessStore = create<ChessState>((set, get) => ({
       }
     }
 
-    game.load(matchData.fen);
+    // Determine last move BEFORE loading the new FEN
+    // Try server fields first, then parse from SAN using current position
+    let newLastMove = get().lastMove;
+    if (matchData.lastMoveFrom && matchData.lastMoveTo) {
+      newLastMove = { from: matchData.lastMoveFrom, to: matchData.lastMoveTo };
+    } else if (turnChanged && matchData.lastMoveSan) {
+      // Fallback: replay the SAN on current board position to extract from/to
+      try {
+        const tempMove = game.move(matchData.lastMoveSan);
+        if (tempMove) {
+          newLastMove = { from: tempMove.from, to: tempMove.to };
+          game.undo();
+        }
+      } catch { /* ignore parse errors */ }
+    }
 
-    const newLastMove = matchData.lastMoveFrom && matchData.lastMoveTo
-      ? { from: matchData.lastMoveFrom, to: matchData.lastMoveTo }
-      : get().lastMove;
+    game.load(matchData.fen);
 
     set({
       isMyTurn,
