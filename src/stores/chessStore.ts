@@ -2,6 +2,14 @@ import { create } from 'zustand';
 import { Chess } from 'chess.js';
 import { sendChessMove, sendResign, getWorldRoom } from '../game/network/colyseusClient';
 import { chessAudio, getSoundForSan } from '../game/audio/chessAudio';
+import { supabase } from '../lib/supabase';
+
+interface MoveRecord {
+  san: string;
+  from: string;
+  to: string;
+  fen: string;
+}
 
 interface ChessState {
   matchId: string | null;
@@ -27,6 +35,11 @@ interface ChessState {
   showBoard: boolean;
   lastMove: { from: string; to: string } | null;
 
+  // Move history for navigation
+  moveHistory: MoveRecord[];
+  viewIndex: number; // -1 means viewing live/current position
+  dbMatchId: string | null; // UUID for the database match record
+
   openMatch: (matchId: string, color: 'w' | 'b', userId: string, boardId?: string) => void;
   openSpectate: (matchId: string) => void;
   syncFromColyseus: (matchData: any) => void;
@@ -37,6 +50,67 @@ interface ChessState {
   reopenBoard: () => void;
   tickTimer: () => void;
   reset: () => void;
+
+  // Navigation
+  goToStart: () => void;
+  goBack: () => void;
+  goForward: () => void;
+  goToLive: () => void;
+}
+
+const INITIAL_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+async function createDbMatch(matchId: string, whiteUserId: string, blackUserId: string, region: string, boardId: string | null, timeMinutes: number, incrementSeconds: number) {
+  try {
+    const { error } = await supabase.from('matches').insert({
+      id: undefined,
+      region,
+      board_id: boardId || null,
+      white_user_id: whiteUserId,
+      black_user_id: blackUserId,
+      current_fen: INITIAL_FEN,
+      pgn: '',
+      status: 'playing',
+      turn: 'w',
+      time_minutes: timeMinutes,
+      increment_seconds: incrementSeconds,
+    });
+    if (error) console.error('[ChessStore] Failed to create DB match:', error.message);
+  } catch (e) {
+    console.error('[ChessStore] createDbMatch exception:', e);
+  }
+}
+
+async function saveMoveToDB(dbMatchId: string, moveNumber: number, userId: string, from: string, to: string, san: string, fenAfter: string) {
+  try {
+    const { error } = await supabase.from('match_moves').insert({
+      match_id: dbMatchId,
+      move_number: moveNumber,
+      user_id: userId,
+      from_square: from,
+      to_square: to,
+      san,
+      fen_after: fenAfter,
+    });
+    if (error) console.error('[ChessStore] Failed to save move:', error.message);
+  } catch (e) {
+    console.error('[ChessStore] saveMoveToDB exception:', e);
+  }
+}
+
+async function updateDbMatchStatus(dbMatchId: string, status: string, result: string | null, winnerId: string | null, finalFen: string) {
+  try {
+    const { error } = await supabase.from('matches').update({
+      status,
+      result,
+      winner_user_id: winnerId,
+      current_fen: finalFen,
+      finished_at: new Date().toISOString(),
+    }).eq('id', dbMatchId);
+    if (error) console.error('[ChessStore] Failed to update match status:', error.message);
+  } catch (e) {
+    console.error('[ChessStore] updateDbMatchStatus exception:', e);
+  }
 }
 
 export const useChessStore = create<ChessState>((set, get) => ({
@@ -62,6 +136,9 @@ export const useChessStore = create<ChessState>((set, get) => ({
   blackPlayerId: '',
   showBoard: false,
   lastMove: null,
+  moveHistory: [],
+  viewIndex: -1,
+  dbMatchId: null,
 
   openMatch: (matchId, color, _userId, boardIdArg) => {
     const room = getWorldRoom();
@@ -101,7 +178,39 @@ export const useChessStore = create<ChessState>((set, get) => ({
       validMoves: [],
       lastMove: null,
       showBoard: true,
+      moveHistory: [],
+      viewIndex: -1,
+      dbMatchId: null,
     });
+
+    // Create the DB match record (fire and forget)
+    if (color === 'w' && matchData?.whitePlayerId && matchData?.blackPlayerId) {
+      const timeMinutes = matchData?.whiteTimeMs ? Math.round(matchData.whiteTimeMs / 60000) : 10;
+      const incrementSec = matchData?.incrementMs ? Math.round(matchData.incrementMs / 1000) : 0;
+      createDbMatch(
+        matchId,
+        matchData.whitePlayerId,
+        matchData.blackPlayerId,
+        matchData.region || 'default',
+        boardId,
+        timeMinutes,
+        incrementSec,
+      ).then(async () => {
+        // Retrieve the created record to get the DB-generated UUID
+        const { data } = await supabase
+          .from('matches')
+          .select('id')
+          .eq('white_user_id', matchData.whitePlayerId)
+          .eq('black_user_id', matchData.blackPlayerId)
+          .eq('status', 'playing')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (data) {
+          set({ dbMatchId: data.id });
+        }
+      });
+    }
   },
 
   openSpectate: (matchId) => {
@@ -140,11 +249,13 @@ export const useChessStore = create<ChessState>((set, get) => ({
       blackPlayerId: matchData.blackPlayerId,
       selectedSquare: null,
       validMoves: [],
+      moveHistory: [],
+      viewIndex: -1,
     });
   },
 
   syncFromColyseus: (matchData) => {
-    const { matchId, game, playerColor, isSpectating, gameOver: wasGameOver, turn: prevTurn } = get();
+    const { matchId, game, playerColor, isSpectating, gameOver: wasGameOver, turn: prevTurn, moveHistory, dbMatchId } = get();
     if (!matchId || !game) return;
     if (matchData.id !== matchId) return;
 
@@ -170,25 +281,54 @@ export const useChessStore = create<ChessState>((set, get) => ({
       } else {
         chessAudio.play('gameOver');
       }
+      // Update DB match when game ends (only white player saves to avoid duplicates)
+      if (dbMatchId && playerColor === 'w') {
+        updateDbMatchStatus(dbMatchId, 'finished', matchData.result || 'draw', matchData.winnerId || null, matchData.fen);
+      }
     }
 
     // Determine last move BEFORE loading the new FEN
-    // Try server fields first, then parse from SAN using current position
     let newLastMove = get().lastMove;
+    let newMoveRecord: MoveRecord | null = null;
+
     if (matchData.lastMoveFrom && matchData.lastMoveTo) {
       newLastMove = { from: matchData.lastMoveFrom, to: matchData.lastMoveTo };
+      if (turnChanged && matchData.lastMoveSan) {
+        newMoveRecord = {
+          san: matchData.lastMoveSan,
+          from: matchData.lastMoveFrom,
+          to: matchData.lastMoveTo,
+          fen: matchData.fen,
+        };
+      }
     } else if (turnChanged && matchData.lastMoveSan) {
-      // Fallback: replay the SAN on current board position to extract from/to
       try {
         const tempMove = game.move(matchData.lastMoveSan);
         if (tempMove) {
           newLastMove = { from: tempMove.from, to: tempMove.to };
+          newMoveRecord = {
+            san: matchData.lastMoveSan,
+            from: tempMove.from,
+            to: tempMove.to,
+            fen: matchData.fen,
+          };
           game.undo();
         }
       } catch { /* ignore parse errors */ }
     }
 
     game.load(matchData.fen);
+
+    // Add opponent/spectator moves to history
+    const updatedHistory = newMoveRecord && (opponentJustMoved || spectatorSync)
+      ? [...moveHistory, newMoveRecord]
+      : moveHistory;
+
+    // Save opponent move to DB (only the opponent's client saves their own moves)
+    if (newMoveRecord && opponentJustMoved && dbMatchId && playerColor) {
+      const movingPlayerId = playerColor === 'w' ? get().blackPlayerId : get().whitePlayerId;
+      saveMoveToDB(dbMatchId, updatedHistory.length, movingPlayerId, newMoveRecord.from, newMoveRecord.to, newMoveRecord.san, newMoveRecord.fen);
+    }
 
     set({
       isMyTurn,
@@ -202,12 +342,15 @@ export const useChessStore = create<ChessState>((set, get) => ({
       selectedSquare: null,
       validMoves: [],
       lastMove: newLastMove,
+      moveHistory: updatedHistory,
+      viewIndex: -1, // Snap to live when new move arrives
     });
   },
 
   selectSquare: (square) => {
-    const { game, playerColor, isMyTurn, selectedSquare, gameOver, isSpectating } = get();
+    const { game, playerColor, isMyTurn, selectedSquare, gameOver, isSpectating, viewIndex } = get();
     if (!game || !playerColor || !isMyTurn || gameOver || isSpectating) return;
+    if (viewIndex !== -1) return; // Can't select while viewing history
 
     if (selectedSquare) {
       set({ selectedSquare: null, validMoves: [] });
@@ -222,7 +365,7 @@ export const useChessStore = create<ChessState>((set, get) => ({
   },
 
   makeMove: (from, to, promotion) => {
-    const { matchId, game, playerColor } = get();
+    const { matchId, game, playerColor, moveHistory, dbMatchId } = get();
     if (!matchId || !game || !playerColor) return;
 
     const piece = game.get(from as any);
@@ -235,15 +378,32 @@ export const useChessStore = create<ChessState>((set, get) => ({
     const sound = getSoundForSan(moveResult.san, isGameOver, isGameOver && game.isCheckmate() ? 'checkmate' : null);
     chessAudio.play(sound);
 
+    const newRecord: MoveRecord = {
+      san: moveResult.san,
+      from,
+      to,
+      fen: game.fen(),
+    };
+
+    const updatedHistory = [...moveHistory, newRecord];
+
     set({
       selectedSquare: null,
       validMoves: [],
       isMyTurn: false,
       turn: game.turn(),
       lastMove: { from, to },
+      moveHistory: updatedHistory,
+      viewIndex: -1,
     });
 
     sendChessMove(matchId, from, to, actualPromotion);
+
+    // Save own move to DB
+    if (dbMatchId) {
+      const userId = playerColor === 'w' ? get().whitePlayerId : get().blackPlayerId;
+      saveMoveToDB(dbMatchId, updatedHistory.length, userId, from, to, moveResult.san, game.fen());
+    }
   },
 
   resign: () => {
@@ -267,6 +427,39 @@ export const useChessStore = create<ChessState>((set, get) => ({
     // No-op: display time is computed in the component from server values
   },
 
+  // Navigation: go to the very first position (before any moves)
+  goToStart: () => {
+    const { moveHistory } = get();
+    if (moveHistory.length === 0) return;
+    set({ viewIndex: 0 });
+  },
+
+  // Navigation: go back one move
+  goBack: () => {
+    const { moveHistory, viewIndex } = get();
+    if (moveHistory.length === 0) return;
+    const currentIdx = viewIndex === -1 ? moveHistory.length : viewIndex;
+    if (currentIdx <= 0) return;
+    set({ viewIndex: currentIdx - 1 });
+  },
+
+  // Navigation: go forward one move
+  goForward: () => {
+    const { moveHistory, viewIndex } = get();
+    if (viewIndex === -1) return; // Already at live
+    const nextIdx = viewIndex + 1;
+    if (nextIdx >= moveHistory.length) {
+      set({ viewIndex: -1 }); // Back to live
+    } else {
+      set({ viewIndex: nextIdx });
+    }
+  },
+
+  // Navigation: go to current/live position
+  goToLive: () => {
+    set({ viewIndex: -1 });
+  },
+
   reset: () => {
     set({
       matchId: null, boardId: null, game: null, playerColor: null,
@@ -275,6 +468,7 @@ export const useChessStore = create<ChessState>((set, get) => ({
       whiteTimeMs: 600000, blackTimeMs: 600000, lastMoveAt: Date.now(),
       incrementMs: 0, turn: 'w', whitePlayerName: '', blackPlayerName: '',
       whitePlayerId: '', blackPlayerId: '', lastMove: null,
+      moveHistory: [], viewIndex: -1, dbMatchId: null,
     });
   },
 }));
