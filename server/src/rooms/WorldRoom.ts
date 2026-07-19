@@ -218,6 +218,8 @@ export class WorldRoom extends Room<WorldState> {
       match.turn = game.turn();
       match.lastMoveAt = now;
       match.lastMoveSan = moveResult.san;
+      match.lastMoveFrom = moveResult.from;
+      match.lastMoveTo = moveResult.to;
 
       if (game.isGameOver()) {
         this.endMatch(matchId, game);

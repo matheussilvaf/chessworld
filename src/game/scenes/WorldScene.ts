@@ -1243,8 +1243,10 @@ export class WorldScene extends Phaser.Scene {
     // Use overlay manager if available
     if (this.chessOverlay) {
       if (status === 'waiting') {
-        this.chessOverlay.removeAll(arenaId);
+        this.chessOverlay.removeBanner(arenaId);
         this.chessOverlay.showWaitingBanner(arenaId, info?.playerName || '', info?.timeLabel || '');
+        // Keep the board overlay visible with starting position
+        this.chessOverlay.showMatchOverlay(arenaId, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
       } else if (status === 'in_match') {
         this.chessOverlay.removeBanner(arenaId);
         if (info?.fen) {
@@ -1253,7 +1255,9 @@ export class WorldScene extends Phaser.Scene {
           this.chessOverlay.showInProgressBanner(arenaId);
         }
       } else {
-        this.chessOverlay.removeAll(arenaId);
+        // Idle: show starting position on all boards
+        this.chessOverlay.removeBanner(arenaId);
+        this.chessOverlay.showMatchOverlay(arenaId, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
       }
       return;
     }
@@ -1451,6 +1455,7 @@ export class WorldScene extends Phaser.Scene {
 
     // Initialize chess overlay manager and register all tables
     this.chessOverlay = new ChessOverlayManager(this);
+    const startingFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
     for (const [tableId, anchors] of this.tableRegistry.tables) {
       if (anchors.overlayArea) {
         this.chessOverlay.registerTable({
@@ -1460,6 +1465,7 @@ export class WorldScene extends Phaser.Scene {
           width: anchors.overlayArea.width,
           height: anchors.overlayArea.height,
         });
+        this.chessOverlay.showMatchOverlay(tableId, startingFen);
       }
     }
   }

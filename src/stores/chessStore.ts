@@ -25,6 +25,7 @@ interface ChessState {
   whitePlayerId: string;
   blackPlayerId: string;
   showBoard: boolean;
+  lastMove: { from: string; to: string } | null;
 
   openMatch: (matchId: string, color: 'w' | 'b', userId: string, boardId?: string) => void;
   openSpectate: (matchId: string) => void;
@@ -60,6 +61,7 @@ export const useChessStore = create<ChessState>((set, get) => ({
   whitePlayerId: '',
   blackPlayerId: '',
   showBoard: false,
+  lastMove: null,
 
   openMatch: (matchId, color, _userId, boardIdArg) => {
     const room = getWorldRoom();
@@ -170,6 +172,10 @@ export const useChessStore = create<ChessState>((set, get) => ({
 
     game.load(matchData.fen);
 
+    const newLastMove = matchData.lastMoveFrom && matchData.lastMoveTo
+      ? { from: matchData.lastMoveFrom, to: matchData.lastMoveTo }
+      : get().lastMove;
+
     set({
       isMyTurn,
       gameOver: newGameOver,
@@ -181,6 +187,7 @@ export const useChessStore = create<ChessState>((set, get) => ({
       turn: matchData.turn,
       selectedSquare: null,
       validMoves: [],
+      lastMove: newLastMove,
     });
   },
 
@@ -219,6 +226,7 @@ export const useChessStore = create<ChessState>((set, get) => ({
       validMoves: [],
       isMyTurn: false,
       turn: game.turn(),
+      lastMove: { from, to },
     });
 
     sendChessMove(matchId, from, to, actualPromotion);
@@ -252,7 +260,7 @@ export const useChessStore = create<ChessState>((set, get) => ({
       result: null, winnerId: null, isSpectating: false, showBoard: false,
       whiteTimeMs: 600000, blackTimeMs: 600000, lastMoveAt: Date.now(),
       incrementMs: 0, turn: 'w', whitePlayerName: '', blackPlayerName: '',
-      whitePlayerId: '', blackPlayerId: '',
+      whitePlayerId: '', blackPlayerId: '', lastMove: null,
     });
   },
 }));

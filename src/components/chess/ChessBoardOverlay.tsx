@@ -190,15 +190,7 @@ export function ChessBoardOverlay() {
 
   const isMyTurn = !isSpectating && !gameOver && turn === playerColor;
 
-  // Safely get last move
-  let lastMove: { from: string; to: string } | null = null;
-  try {
-    const history = game.history({ verbose: true });
-    if (history.length > 0) {
-      const last = history[history.length - 1];
-      lastMove = { from: last.from, to: last.to };
-    }
-  } catch { /* game may be in transient state */ }
+  const lastMove = useChessStore(s => s.lastMove);
 
   // Parse board from FEN
   const boardMap = new Map<string, string>();
