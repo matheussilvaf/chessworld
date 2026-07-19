@@ -40,6 +40,7 @@ interface RemotePlayer {
   playerId: string;
   seated: boolean;
   seatedBoardId: string;
+  seatedSeat: 'bottom' | 'top' | '';
 }
 
 type MovementSender = (data: {
@@ -348,6 +349,7 @@ export class WorldScene extends Phaser.Scene {
 
     // Snap remote players to integer positions too
     this.otherPlayers.forEach((remote) => {
+      if (remote.seated) return;
       const pos = remote.interpolator.getPosition();
       remote.container.x = Math.floor(pos.x);
       remote.container.y = Math.floor(pos.y);
@@ -1123,6 +1125,7 @@ export class WorldScene extends Phaser.Scene {
   public updateRemotePlayerState(sessionId: string, state: { x: number; y: number; targetX: number; targetY: number; direction: string; isMoving: boolean }) {
     const remote = this.otherPlayers.get(sessionId);
     if (!remote) return;
+    if (remote.seated) return;
     remote.interpolator.pushSnapshot(state.x, state.y);
     remote.direction = (state.direction as Direction8) || 'down';
     remote.isMoving = state.isMoving;
@@ -1142,6 +1145,7 @@ export class WorldScene extends Phaser.Scene {
 
     remote.seated = true;
     remote.seatedBoardId = tableId;
+    remote.seatedSeat = seat;
     remote.isMoving = false;
     remote.sprite.anims.stop();
 
@@ -1174,6 +1178,8 @@ export class WorldScene extends Phaser.Scene {
     if (!remote) return;
     remote.seated = false;
     remote.seatedBoardId = '';
+    remote.seatedSeat = '';
+    remote.interpolator.pushSnapshot(remote.container.x, remote.container.y);
     const charDef = getCharacter();
     remote.sprite.setTexture(charDef.id);
     remote.sprite.setRotation(0);
@@ -1185,6 +1191,8 @@ export class WorldScene extends Phaser.Scene {
       if (remote.seated && remote.seatedBoardId === boardId) {
         remote.seated = false;
         remote.seatedBoardId = '';
+        remote.seatedSeat = '';
+        remote.interpolator.pushSnapshot(remote.container.x, remote.container.y);
         const charDef = getCharacter();
         remote.sprite.setTexture(charDef.id);
         remote.sprite.setRotation(0);
@@ -1237,6 +1245,7 @@ export class WorldScene extends Phaser.Scene {
       playerId: p.id,
       seated: false,
       seatedBoardId: '',
+      seatedSeat: '',
     });
   }
 
@@ -1284,11 +1293,22 @@ export class WorldScene extends Phaser.Scene {
     if (this.chessOverlay) {
       this.chessOverlay.setActiveTable(tableId);
     }
-    // Rotate 180° for black player - SNAP instantly (no animation)
+    // Rotate 180 for black player - SNAP instantly (no animation)
     if (playerColor === 'b') {
       this.targetRotation = Math.PI;
       this.currentCameraRotation = Math.PI;
       this.cameras.main.setRotation(Math.PI);
+      // Re-seat any already-seated remote players to update their sprite rotation
+      for (const remote of this.otherPlayers.values()) {
+        if (remote.seated && remote.seatedBoardId === tableId) {
+          const seat = remote.seatedSeat as 'bottom' | 'top';
+          if (!seat) continue;
+          const sittingTexture = seat === 'bottom' ? 'sitting-south' : 'sitting-north';
+          remote.sprite.setTexture(sittingTexture);
+          remote.sprite.setRotation(Math.PI);
+          remote.sprite.setFrame(0);
+        }
+      }
     }
   }
 

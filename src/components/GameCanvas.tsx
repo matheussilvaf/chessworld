@@ -485,6 +485,8 @@ function syncBoardsToStore(room: Room<any>) {
       status: board.status,
       waitingPlayerId: board.waitingPlayerId,
       waitingPlayerName: board.waitingPlayerName,
+      whitePlayerId: board.whitePlayerId || '',
+      blackPlayerId: board.blackPlayerId || '',
       timeCategory: board.timeCategory,
       baseMinutes: board.baseMinutes,
       incrementSeconds: board.incrementSeconds,
