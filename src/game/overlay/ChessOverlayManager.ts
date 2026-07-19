@@ -161,14 +161,11 @@ export class ChessOverlayManager {
       duration: 1200, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
     });
 
-    // Store banner reference - do NOT create overlay (no checkerboard for waiting state)
     let overlay = this.overlays.get(tableId);
     if (!overlay) {
       overlay = this.createOverlay(config);
       this.overlays.set(tableId, overlay);
     }
-    // Keep overlay hidden - waiting state only shows banner, never the board
-    overlay.container.setVisible(false);
     overlay.banner = banner;
   }
 

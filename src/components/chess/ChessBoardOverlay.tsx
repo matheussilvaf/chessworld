@@ -76,6 +76,7 @@ export function ChessBoardOverlay() {
   const gameOver = useChessStore(s => s.gameOver);
   const isSpectating = useChessStore(s => s.isSpectating);
   const makeMove = useChessStore(s => s.makeMove);
+  const lastMove = useChessStore(s => s.lastMove);
 
   const [screenRect, setScreenRect] = useState<ScreenRect | null>(null);
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
@@ -189,8 +190,6 @@ export function ChessBoardOverlay() {
   if (!matchId || !game || !screenRect || !piecesLoaded) return null;
 
   const isMyTurn = !isSpectating && !gameOver && turn === playerColor;
-
-  const lastMove = useChessStore(s => s.lastMove);
 
   // Parse board from FEN
   const boardMap = new Map<string, string>();

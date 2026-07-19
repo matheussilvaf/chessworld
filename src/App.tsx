@@ -13,6 +13,7 @@ import { FriendRequests } from './components/game/FriendRequests';
 import { SettingsModal } from './components/game/SettingsModal';
 import { VoiceChatPanel } from './components/game/VoiceChatPanel';
 
+import { TableWaitingOverlays } from './components/game/TableWaitingOverlays';
 import { InteractionDebugModal } from './components/game/InteractionDebugModal';
 import { MatchHUD } from './components/game/MatchHUD';
 import { ChessBoardOverlay } from './components/chess/ChessBoardOverlay';
@@ -79,6 +80,7 @@ function GameScene() {
       <ZoneIndicator />
       <MatchHUD />
       <ChessBoardOverlay />
+      <TableWaitingOverlays />
     </div>
   );
 }
