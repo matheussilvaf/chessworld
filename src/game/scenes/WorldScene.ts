@@ -38,6 +38,8 @@ interface RemotePlayer {
   isMoving: boolean;
   sessionId: string;
   playerId: string;
+  seated: boolean;
+  seatedBoardId: string;
 }
 
 type MovementSender = (data: {
@@ -131,6 +133,9 @@ export class WorldScene extends Phaser.Scene {
       frameWidth: charDef.frameWidth,
       frameHeight: charDef.frameHeight,
     });
+
+    this.load.image('sitting-north', '/assets/characters/action/sitting/north.png');
+    this.load.image('sitting-south', '/assets/characters/action/sitting/south.png');
 
     for (const ts of WORLD_TILESETS) {
       this.load.image(ts.textureKey, MAP_CONFIG.basePath + ts.image);
@@ -939,6 +944,7 @@ export class WorldScene extends Phaser.Scene {
     // to guarantee they read the FINAL physics position for this frame.
 
     this.otherPlayers.forEach((remote) => {
+      if (remote.seated) return;
       if (remote.isMoving) {
         remote.sprite.anims.play(getAnimKey(remote.direction), true);
       } else {
@@ -1121,6 +1127,54 @@ export class WorldScene extends Phaser.Scene {
     remote.isMoving = state.isMoving;
   }
 
+  public seatRemotePlayerById(playerId: string, seat: 'bottom' | 'top', tableId: string) {
+    let remote: RemotePlayer | undefined;
+    for (const r of this.otherPlayers.values()) {
+      if (r.playerId === playerId) { remote = r; break; }
+    }
+    if (!remote) return;
+
+    const anchors = this.tableRegistry?.tables.get(tableId);
+    if (!anchors) return;
+    const anchor = getSeatAnchor(anchors, 'player', seat);
+    if (!anchor) return;
+
+    remote.seated = true;
+    remote.seatedBoardId = tableId;
+    remote.isMoving = false;
+    remote.sprite.anims.stop();
+    const sittingTexture = seat === 'bottom' ? 'sitting-north' : 'sitting-south';
+    remote.sprite.setTexture(sittingTexture);
+    remote.sprite.setFrame(0);
+    remote.container.setPosition(anchor.x, anchor.y);
+    remote.interpolator.pushSnapshot(anchor.x, anchor.y);
+  }
+
+  public unseatRemotePlayerById(playerId: string) {
+    let remote: RemotePlayer | undefined;
+    for (const r of this.otherPlayers.values()) {
+      if (r.playerId === playerId) { remote = r; break; }
+    }
+    if (!remote) return;
+    remote.seated = false;
+    remote.seatedBoardId = '';
+    const charDef = getCharacter();
+    remote.sprite.setTexture(charDef.id);
+    remote.sprite.setFrame(getIdleFrame(remote.direction));
+  }
+
+  public unseatRemotePlayersAtBoard(boardId: string) {
+    for (const remote of this.otherPlayers.values()) {
+      if (remote.seated && remote.seatedBoardId === boardId) {
+        remote.seated = false;
+        remote.seatedBoardId = '';
+        const charDef = getCharacter();
+        remote.sprite.setTexture(charDef.id);
+        remote.sprite.setFrame(getIdleFrame(remote.direction));
+      }
+    }
+  }
+
   private addRemotePlayer(sessionId: string, p: { id: string; username: string; rating: number; x: number; y: number; direction: string; isMoving: boolean }) {
     const charDef = getCharacter();
     const c = this.add.container(p.x, p.y).setDepth(99);
@@ -1163,6 +1217,8 @@ export class WorldScene extends Phaser.Scene {
       isMoving: p.isMoving,
       sessionId,
       playerId: p.id,
+      seated: false,
+      seatedBoardId: '',
     });
   }
 
@@ -1457,7 +1513,10 @@ export class WorldScene extends Phaser.Scene {
         this.player.y = Math.round(anchor.y);
         this.currentDirection = anchor.direction as any;
         this.player.anims.stop();
-        this.player.setFrame(getIdleFrame(this.currentDirection));
+        // Swap to sitting texture: bottom seat (White) = north, top seat (Black) = south
+        const sittingTexture = seat === 'bottom' ? 'sitting-north' : 'sitting-south';
+        this.player.setTexture(sittingTexture);
+        this.player.setFrame(0);
         this.seatTween = null;
         // Broadcast final seated position
         this.emitMovement(false, this.currentDirection);
@@ -1499,6 +1558,11 @@ export class WorldScene extends Phaser.Scene {
     }
 
     if (anchors) {
+      // Restore walking spritesheet before exit animation
+      const charDef = getCharacter();
+      this.player.setTexture(charDef.id);
+      this.player.setFrame(getIdleFrame(this.currentDirection));
+
       const exit = getExitAnchor(anchors, role, seat);
       if (exit && exit.x !== 0) {
         const targetBodyX = exit.x + this.playerFeetOffsetX;

@@ -460,8 +460,18 @@ function updateBoardVisual(scene: WorldScene, board: any, room?: Room<any>) {
     // Always show the board with pieces - use starting FEN as fallback
     const fenToShow = fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
     scene.updateBoardFEN(board.id, fenToShow);
+
+    // Seat remote players at the board (skip local player - handled by match_started)
+    const localUserId = useAuthStore.getState().user?.id;
+    if (board.whitePlayerId && board.whitePlayerId !== localUserId) {
+      scene.seatRemotePlayerById(board.whitePlayerId, 'bottom', board.id);
+    }
+    if (board.blackPlayerId && board.blackPlayerId !== localUserId) {
+      scene.seatRemotePlayerById(board.blackPlayerId, 'top', board.id);
+    }
   } else {
     scene.updateBoardStatus(board.id, 'idle');
+    scene.unseatRemotePlayersAtBoard(board.id);
   }
 }
 
