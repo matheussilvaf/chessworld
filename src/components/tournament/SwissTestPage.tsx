@@ -391,7 +391,7 @@ export function SwissTestPage() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <ConfigSection
                 tournament={tournament}
-                engineStatus={null}
+                engineStatus={health ? { available: health.pairingEngine, version: health.engineVersion, error: health.engineError } : null}
                 onAction={handleAction}
               />
               <PlayersSection
