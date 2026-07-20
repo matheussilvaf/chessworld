@@ -3,7 +3,9 @@ import { monitor } from "@colyseus/monitor";
 import { WorldRoom } from "./rooms/WorldRoom.js";
 import type { Request, Response } from "express";
 import express from "express";
+import cors from "cors";
 import { AccessToken } from "livekit-server-sdk";
+import { tournamentRouter } from "./tournament/routes.js";
 
 const config: ConfigOptions = {
   initializeGameServer: (gameServer) => {
@@ -56,6 +58,9 @@ const config: ConfigOptions = {
         roomName,
       });
     });
+
+    app.use(cors());
+    app.use("/api/tournament", tournamentRouter);
 
     app.use("/colyseus", monitor());
   },
