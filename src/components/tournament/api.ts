@@ -14,7 +14,7 @@ async function request(method: string, path: string, body?: any) {
 
 export const tournamentApi = {
   getEngineStatus: () => request('GET', '/engine-status'),
-  getPresets: () => request('GET', '/presets'),
+  listPresets: () => request('GET', '/presets'),
   listTournaments: () => request('GET', '/tournaments'),
   getTournament: (id: string) => request('GET', `/tournaments/${id}`),
   createTournament: (name: string) => request('POST', '/tournaments', { name }),

@@ -17,16 +17,25 @@ export function SwissTestPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Override overflow:hidden on html/body for this scrollable page
   useEffect(() => {
     document.documentElement.style.overflow = 'auto';
+    document.documentElement.style.height = 'auto';
     document.body.style.overflow = 'auto';
+    document.body.style.height = 'auto';
     const root = document.getElementById('root');
-    if (root) root.style.overflow = 'auto';
+    if (root) {
+      root.style.overflow = 'auto';
+      root.style.height = 'auto';
+    }
     return () => {
       document.documentElement.style.overflow = '';
+      document.documentElement.style.height = '';
       document.body.style.overflow = '';
-      if (root) root.style.overflow = '';
+      document.body.style.height = '';
+      if (root) {
+        root.style.overflow = '';
+        root.style.height = '';
+      }
     };
   }, []);
 
@@ -125,7 +134,7 @@ export function SwissTestPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200">
+    <div style={{ minHeight: '100vh', background: '#020617', color: '#e2e8f0' }}>
       {/* Header */}
       <header className="sticky top-0 z-50 bg-slate-900/95 backdrop-blur border-b border-slate-700/50">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -185,9 +194,12 @@ export function SwissTestPage() {
         )}
 
         {!tournament ? (
-          <div className="text-center py-20 text-slate-500">
-            <Trophy className="w-16 h-16 mx-auto mb-4 opacity-30" />
-            <p className="text-lg">Create or select a tournament to begin</p>
+          <div className="text-center py-20">
+            <Trophy className="w-16 h-16 mx-auto mb-4 text-slate-600" />
+            <p className="text-lg text-slate-400">Create or select a tournament to begin</p>
+            <button onClick={createNew} className="mt-4 btn-sm btn-primary inline-flex">
+              <Plus className="w-4 h-4" /> Create Tournament
+            </button>
           </div>
         ) : (
           <div className="space-y-6">
