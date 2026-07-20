@@ -1,5 +1,4 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { useGameStore } from './stores/gameStore';
 import { AuthPage } from './components/auth/AuthPage';
@@ -23,20 +22,8 @@ import { ZoneIndicator } from './components/game/ZoneIndicator';
 import { useColyseusConnection } from './hooks/useColyseusConnection';
 import { leaveWorldRoom } from './game/network/colyseusClient';
 import { Loader2 } from 'lucide-react';
-import { SwissTestPage } from './components/tournament/SwissTestPage';
 
 function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/swiss-test" element={<SwissTestPage />} />
-        <Route path="*" element={<MainApp />} />
-      </Routes>
-    </BrowserRouter>
-  );
-}
-
-function MainApp() {
   const { user, profile, loading, initialized, initialize } = useAuthStore();
   const { region } = useGameStore();
 
