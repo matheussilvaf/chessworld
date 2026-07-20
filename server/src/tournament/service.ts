@@ -9,23 +9,56 @@ import { serializeTournamentToTRF, parsePairingOutput } from './trf.js';
 import { generatePairing, getEngineStatus } from './engine.js';
 import { validatePairing, validateAllResults } from './validation.js';
 import { computeStandings, computeAllHistories } from './tiebreaks.js';
+import { loadAllTestTournaments, loadTournament, saveTournamentToDb, deleteTournamentFromDb } from './persistence.js';
 
-// In-memory store for tests (will be replaced by DB in production)
+// In-memory cache backed by Supabase persistence
 const tournaments = new Map<string, Tournament>();
+let cacheLoaded = false;
 
-export function listTournaments(): Tournament[] {
+async function ensureCacheLoaded(): Promise<void> {
+  if (cacheLoaded) return;
+  try {
+    const all = await loadAllTestTournaments();
+    for (const t of all) {
+      tournaments.set(t.id, t);
+    }
+  } catch (e) {
+    console.warn('[Tournament] Failed to load from persistence, using empty cache:', (e as Error).message);
+  }
+  cacheLoaded = true;
+}
+
+async function persist(tournament: Tournament, createdBy?: string): Promise<void> {
+  try {
+    await saveTournamentToDb(tournament, createdBy, true);
+  } catch (e) {
+    console.error('[Tournament] Persistence error:', (e as Error).message);
+  }
+}
+
+export async function listTournaments(): Promise<Tournament[]> {
+  await ensureCacheLoaded();
   return Array.from(tournaments.values());
 }
 
-export function getTournament(id: string): Tournament | null {
-  return tournaments.get(id) || null;
+export async function getTournament(id: string): Promise<Tournament | null> {
+  await ensureCacheLoaded();
+  let t = tournaments.get(id) || null;
+  if (!t) {
+    t = await loadTournament(id);
+    if (t) tournaments.set(t.id, t);
+  }
+  return t;
 }
 
-export function deleteTournament(id: string): boolean {
-  return tournaments.delete(id);
+export async function deleteTournament(id: string): Promise<boolean> {
+  tournaments.delete(id);
+  try { await deleteTournamentFromDb(id); } catch { /* best effort */ }
+  return true;
 }
 
-export function createTournament(name: string): Tournament {
+export async function createTournament(name: string, createdBy?: string): Promise<Tournament> {
+  await ensureCacheLoaded();
   const tournament: Tournament = {
     id: nanoid(),
     name,
@@ -42,10 +75,11 @@ export function createTournament(name: string): Tournament {
     updatedAt: new Date().toISOString(),
   };
   tournaments.set(tournament.id, tournament);
+  await persist(tournament, createdBy);
   return tournament;
 }
 
-export function addPlayer(tournamentId: string, name: string, rating: number): Player {
+export async function addPlayer(tournamentId: string, name: string, rating: number): Promise<Player> {
   const t = tournaments.get(tournamentId);
   if (!t) throw new Error('Tournament not found');
   if (t.status !== 'setup') throw new Error('Cannot add players after tournament started');
@@ -59,18 +93,20 @@ export function addPlayer(tournamentId: string, name: string, rating: number): P
   };
   t.players.push(player);
   t.updatedAt = new Date().toISOString();
+  await persist(t);
   return player;
 }
 
-export function removePlayer(tournamentId: string, playerId: PlayerId): void {
+export async function removePlayer(tournamentId: string, playerId: PlayerId): Promise<void> {
   const t = tournaments.get(tournamentId);
   if (!t) throw new Error('Tournament not found');
   if (t.status !== 'setup') throw new Error('Cannot remove players after tournament started');
   t.players = t.players.filter(p => p.id !== playerId);
   t.updatedAt = new Date().toISOString();
+  await persist(t);
 }
 
-export function updatePlayer(tournamentId: string, playerId: PlayerId, name: string, rating: number): void {
+export async function updatePlayer(tournamentId: string, playerId: PlayerId, name: string, rating: number): Promise<void> {
   const t = tournaments.get(tournamentId);
   if (!t) throw new Error('Tournament not found');
   if (t.status !== 'setup') throw new Error('Cannot edit players after tournament started');
@@ -79,17 +115,19 @@ export function updatePlayer(tournamentId: string, playerId: PlayerId, name: str
   player.name = name;
   player.rating = rating;
   t.updatedAt = new Date().toISOString();
+  await persist(t);
 }
 
-export function clearPlayers(tournamentId: string): void {
+export async function clearPlayers(tournamentId: string): Promise<void> {
   const t = tournaments.get(tournamentId);
   if (!t) throw new Error('Tournament not found');
   if (t.status !== 'setup') throw new Error('Cannot clear players after tournament started');
   t.players = [];
   t.updatedAt = new Date().toISOString();
+  await persist(t);
 }
 
-export function setRoundMode(tournamentId: string, mode: RoundMode, manualCount?: number): void {
+export async function setRoundMode(tournamentId: string, mode: RoundMode, manualCount?: number): Promise<void> {
   const t = tournaments.get(tournamentId);
   if (!t) throw new Error('Tournament not found');
   if (t.status !== 'setup') throw new Error('Cannot change config after tournament started');
@@ -98,9 +136,10 @@ export function setRoundMode(tournamentId: string, mode: RoundMode, manualCount?
     t.config.totalRounds = manualCount;
   }
   t.updatedAt = new Date().toISOString();
+  await persist(t);
 }
 
-export function setInitialColor(tournamentId: string, color: Color | 'random'): void {
+export async function setInitialColor(tournamentId: string, color: Color | 'random'): Promise<void> {
   const t = tournaments.get(tournamentId);
   if (!t) throw new Error('Tournament not found');
   if (t.status !== 'setup') throw new Error('Cannot change config after tournament started');
@@ -110,6 +149,7 @@ export function setInitialColor(tournamentId: string, color: Color | 'random'): 
     t.config.initialColor = color;
   }
   t.updatedAt = new Date().toISOString();
+  await persist(t);
 }
 
 export function getRoundInfo(playerCount: number, mode: RoundMode, manualCount?: number) {
@@ -134,7 +174,6 @@ export function getRoundInfo(playerCount: number, mode: RoundMode, manualCount?:
 }
 
 function assignTPNs(tournament: Tournament): void {
-  // Sort by: 1. rating desc, 2. name alphabetical, 3. id ascending
   const sorted = [...tournament.players].sort((a, b) => {
     if (b.rating !== a.rating) return b.rating - a.rating;
     const nameA = a.name.toLowerCase().normalize('NFD');
@@ -162,15 +201,12 @@ export async function startTournament(tournamentId: string): Promise<StartResult
   if (t.status !== 'setup') return { success: false, error: 'Tournament already started' };
   if (t.players.length < 2) return { success: false, error: 'Need at least 2 players' };
 
-  // Assign TPNs
   assignTPNs(t);
 
-  // Calculate rounds
   const playerCount = t.players.filter(p => p.status === 'active').length;
   t.config.totalRounds = calculateRounds(playerCount, t.config.roundMode,
     t.config.roundMode === 'manual' ? t.config.totalRounds : undefined);
 
-  // If initial color was never explicitly set, randomize now
   if (!t.config.initialColor) {
     t.config.initialColor = Math.random() < 0.5 ? 'w' : 'b';
   }
@@ -178,15 +214,14 @@ export async function startTournament(tournamentId: string): Promise<StartResult
   t.status = 'active';
   t.updatedAt = new Date().toISOString();
 
-  // Generate first round
   const result = await generateNextRound(tournamentId);
   if (!result.success) {
-    // Revert status
     t.status = 'setup';
     t.players.forEach(p => { p.tpn = null; });
     return result;
   }
 
+  await persist(t);
   return { success: true, diagnostics: result.diagnostics };
 }
 
@@ -197,46 +232,40 @@ export async function generateNextRound(tournamentId: string): Promise<StartResu
 
   const finalizedCount = t.rounds.filter(r => r.finalized).length;
 
-  // Check if tournament is complete
   if (finalizedCount >= t.config.totalRounds) {
     t.status = 'finished';
     t.standings = computeStandings(t);
     t.updatedAt = new Date().toISOString();
+    await persist(t);
     return { success: false, error: 'All rounds completed' };
   }
 
-  // Check if last round is finalized
   if (t.rounds.length > 0 && !t.rounds[t.rounds.length - 1].finalized) {
     return { success: false, error: 'Current round not yet finalized' };
   }
 
-  // Check active players
   const activePlayers = t.players.filter(p => p.status === 'active');
   if (activePlayers.length < 2) {
     t.status = 'finished';
     t.standings = computeStandings(t);
     t.updatedAt = new Date().toISOString();
+    await persist(t);
     return { success: false, error: 'Fewer than 2 active players' };
   }
 
   const nextRoundNumber = finalizedCount + 1;
 
-  // Idempotency: if unfinalized round already exists with the correct number, return it
   const existingUnfinalized = t.rounds.find(r => !r.finalized && r.number === nextRoundNumber);
   if (existingUnfinalized) {
     return { success: true };
   }
 
-  // Generate TRF
   const trfContent = serializeTournamentToTRF(t);
-
-  // Call engine
   const response = await generatePairing({ trfContent, roundNumber: nextRoundNumber });
   if (!response.success || !response.result) {
     return { success: false, error: response.diagnostics.errors.join('; '), diagnostics: response.diagnostics };
   }
 
-  // Validate
   const validation = validatePairing(t, response.result, nextRoundNumber);
   if (!validation.valid) {
     response.diagnostics.violations = validation.errors;
@@ -246,7 +275,6 @@ export async function generateNextRound(tournamentId: string): Promise<StartResu
     response.diagnostics.colorWarnings.push(...validation.warnings);
   }
 
-  // Determine board ordering
   const pairings = orderBoards(t, response.result.pairings.map(p => ({
     whiteTpn: p.whiteTpn,
     blackTpn: p.blackTpn,
@@ -255,7 +283,6 @@ export async function generateNextRound(tournamentId: string): Promise<StartResu
     board: 0,
   })));
 
-  // Create round
   const round: Round = {
     number: nextRoundNumber,
     pairings,
@@ -266,11 +293,11 @@ export async function generateNextRound(tournamentId: string): Promise<StartResu
   t.rounds.push(round);
   t.updatedAt = new Date().toISOString();
 
-  // Update diagnostics
   response.diagnostics.activePlayers = activePlayers.length;
   response.diagnostics.expectedPairings = Math.floor(activePlayers.length / 2);
   response.diagnostics.expectedByes = activePlayers.length % 2;
 
+  await persist(t);
   return { success: true, diagnostics: response.diagnostics };
 }
 
@@ -296,13 +323,13 @@ function orderBoards(tournament: Tournament, pairings: Pairing[]): Pairing[] {
     .map((item, index) => ({ ...item.pairing, board: index + 1 }));
 }
 
-export function setResult(
+export async function setResult(
   tournamentId: string,
   roundNumber: number,
   board: number,
   result: GameResult,
   isPlayed: boolean
-): void {
+): Promise<void> {
   const t = tournaments.get(tournamentId);
   if (!t) throw new Error('Tournament not found');
   const round = t.rounds.find(r => r.number === roundNumber);
@@ -313,6 +340,7 @@ export function setResult(
   pairing.result = result;
   pairing.isPlayed = isPlayed;
   t.updatedAt = new Date().toISOString();
+  await persist(t);
 }
 
 export interface FinalizeResult {
@@ -321,7 +349,7 @@ export interface FinalizeResult {
   standings?: Standing[];
 }
 
-export function finalizeRound(tournamentId: string, roundNumber: number): FinalizeResult {
+export async function finalizeRound(tournamentId: string, roundNumber: number): Promise<FinalizeResult> {
   const t = tournaments.get(tournamentId);
   if (!t) return { success: false, error: 'Tournament not found' };
   const round = t.rounds.find(r => r.number === roundNumber);
@@ -337,38 +365,38 @@ export function finalizeRound(tournamentId: string, roundNumber: number): Finali
   t.standings = computeStandings(t);
   t.updatedAt = new Date().toISOString();
 
-  // Check if tournament is complete
   const finalizedCount = t.rounds.filter(r => r.finalized).length;
   if (finalizedCount >= t.config.totalRounds) {
     t.status = 'finished';
   }
 
+  await persist(t);
   return { success: true, standings: t.standings };
 }
 
-export function withdrawPlayer(tournamentId: string, playerId: PlayerId): void {
+export async function withdrawPlayer(tournamentId: string, playerId: PlayerId): Promise<void> {
   const t = tournaments.get(tournamentId);
   if (!t) throw new Error('Tournament not found');
   const player = t.players.find(p => p.id === playerId);
   if (!player) throw new Error('Player not found');
   player.status = 'withdrawn';
   t.updatedAt = new Date().toISOString();
+  await persist(t);
 }
 
-export function correctRound(tournamentId: string, roundNumber: number): { success: boolean; error?: string } {
+export async function correctRound(tournamentId: string, roundNumber: number): Promise<{ success: boolean; error?: string }> {
   const t = tournaments.get(tournamentId);
   if (!t) return { success: false, error: 'Tournament not found' };
   const roundIdx = t.rounds.findIndex(r => r.number === roundNumber);
   if (roundIdx === -1) return { success: false, error: 'Round not found' };
   if (!t.rounds[roundIdx].finalized) return { success: false, error: 'Round not finalized yet' };
 
-  // Remove all rounds after this one
   t.rounds = t.rounds.slice(0, roundIdx + 1);
-  // Reopen this round
   t.rounds[roundIdx].finalized = false;
   t.status = 'active';
   t.standings = computeStandings(t);
   t.updatedAt = new Date().toISOString();
+  await persist(t);
 
   return { success: true };
 }
@@ -381,11 +409,8 @@ export function getPlayerHistories(tournamentId: string): Map<TPN, any> | null {
 
 export { getEngineStatus } from './engine.js';
 
-export function saveTournament(tournament: Tournament): void {
-  tournaments.set(tournament.id, tournament);
-}
-
-export function importTournament(data: Tournament): Tournament {
+export async function importTournament(data: Tournament, createdBy?: string): Promise<Tournament> {
   tournaments.set(data.id, data);
+  await persist(data, createdBy);
   return data;
 }

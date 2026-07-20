@@ -1,18 +1,47 @@
-const BASE = '/api/tournament';
+import { getColyseusHttpUrl, isColyseusConfigured } from '../../config/colyseus';
+import { supabase } from '../../lib/supabase';
+
+function getBaseUrl(): string {
+  const httpUrl = getColyseusHttpUrl();
+  if (!httpUrl) throw new Error('Colyseus endpoint not configured');
+  return `${httpUrl}/api/tournament`;
+}
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('Not authenticated');
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`,
+  };
+}
 
 async function request(method: string, path: string, body?: any) {
-  const opts: RequestInit = {
+  const base = getBaseUrl();
+  const headers = await getAuthHeaders();
+  const opts: RequestInit = { method, headers };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(`${base}${path}`, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+async function requestNoAuth(method: string, path: string) {
+  const base = getBaseUrl();
+  const res = await fetch(`${base}${path}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
-  };
-  if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(`${BASE}${path}`, opts);
+  });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
 }
 
 export const tournamentApi = {
+  isConfigured: () => isColyseusConfigured(),
+  getHealthStatus: () => requestNoAuth('GET', '/health'),
   getEngineStatus: () => request('GET', '/engine-status'),
   listPresets: () => request('GET', '/presets'),
   listTournaments: () => request('GET', '/tournaments'),

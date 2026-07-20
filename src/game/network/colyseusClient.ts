@@ -1,20 +1,19 @@
 import { Client, Room } from 'colyseus.js';
-
-const COLYSEUS_URL = import.meta.env.VITE_COLYSEUS_URL || '';
+import { getColyseusWsUrl, isColyseusConfigured as checkConfigured } from '../../config/colyseus';
 
 export function isColyseusConfigured(): boolean {
-  return COLYSEUS_URL.length > 0;
+  return checkConfigured();
 }
 
 export function getColyseusEndpoint(): string {
-  return COLYSEUS_URL;
+  return getColyseusWsUrl();
 }
 
 let client: Client | null = null;
 
 function getClient(): Client {
   if (!client) {
-    client = new Client(COLYSEUS_URL);
+    client = new Client(getColyseusWsUrl());
   }
   return client;
 }

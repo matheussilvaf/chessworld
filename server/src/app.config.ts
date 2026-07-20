@@ -1,6 +1,7 @@
 import type { ConfigOptions } from "@colyseus/tools";
 import { monitor } from "@colyseus/monitor";
 import { WorldRoom } from "./rooms/WorldRoom.js";
+import { TournamentRoom } from "./rooms/TournamentRoom.js";
 import type { Request, Response } from "express";
 import express from "express";
 import cors from "cors";
@@ -10,10 +11,31 @@ import { tournamentRouter } from "./tournament/routes.js";
 const config: ConfigOptions = {
   initializeGameServer: (gameServer) => {
     gameServer.define("world", WorldRoom).filterBy(["region"]);
+    gameServer.define("tournament", TournamentRoom).filterBy(["tournamentId"]);
   },
 
   initializeExpress: (app) => {
     app.use(express.json());
+
+    const allowedOrigins = [
+      process.env.CLIENT_ORIGIN,
+      'https://chessworld.app',
+      /\.webcontainer-api\.io$/,
+      /\.local-credentialless\.webcontainer-api\.io$/,
+    ].filter(Boolean);
+
+    app.use(cors({
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        const allowed = allowedOrigins.some(o => {
+          if (typeof o === 'string') return o === origin;
+          if (o instanceof RegExp) return o.test(origin);
+          return false;
+        });
+        callback(null, allowed || true);
+      },
+      credentials: true,
+    }));
 
     app.get("/health", (_req: Request, res: Response) => {
       res.json({ ok: true, uptime: process.uptime() });
@@ -59,7 +81,6 @@ const config: ConfigOptions = {
       });
     });
 
-    app.use(cors());
     app.use("/api/tournament", tournamentRouter);
 
     app.use("/colyseus", monitor());

@@ -1,21 +1,56 @@
 import { useState, useEffect, useCallback } from 'react';
 import { tournamentApi } from './api';
+import { useTournamentRoom } from '../../hooks/useTournamentRoom';
+import { getColyseusHttpUrl, isColyseusConfigured } from '../../config/colyseus';
 import { ConfigSection } from './sections/ConfigSection';
 import { PlayersSection } from './sections/PlayersSection';
 import { RoundSection } from './sections/RoundSection';
 import { StandingsSection } from './sections/StandingsSection';
 import { DiagnosticsSection } from './sections/DiagnosticsSection';
 import { PlayerSummary } from './sections/PlayerSummary';
-import { Trophy, RefreshCw, Plus, Trash2, Download, Upload } from 'lucide-react';
+import { Trophy, RefreshCw, Plus, Trash2, Download, Upload, Wifi, WifiOff, Database, Cpu, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+
+interface HealthStatus {
+  server: boolean;
+  tournamentService: boolean;
+  database: boolean;
+  databaseError: string | null;
+  pairingEngine: boolean;
+  engineVersion: string | null;
+  engineError: string | null;
+  checkerAvailable: boolean;
+}
+
+function StatusBadge({ ok, label, detail }: { ok: boolean | null; label: string; detail?: string | null }) {
+  if (ok === null) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs bg-slate-800 text-slate-400 border border-slate-700">
+        <AlertTriangle className="w-3 h-3" /> {label}: Checking...
+      </span>
+    );
+  }
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs border ${
+      ok ? 'bg-emerald-900/30 text-emerald-300 border-emerald-700/50' : 'bg-red-900/30 text-red-300 border-red-700/50'
+    }`} title={detail || undefined}>
+      {ok ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+      {label}: {ok ? 'Available' : 'Unavailable'}
+      {detail && <span className="opacity-60">({detail})</span>}
+    </span>
+  );
+}
 
 export function SwissTestPage() {
-  const [tournament, setTournament] = useState<any>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tournaments, setTournaments] = useState<any[]>([]);
-  const [engineStatus, setEngineStatus] = useState<any>(null);
   const [presets, setPresets] = useState<any[]>([]);
   const [diagnostics, setDiagnostics] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+
+  const { tournament, connected, requestRefresh } = useTournamentRoom(selectedId);
 
   useEffect(() => {
     document.documentElement.style.overflow = 'auto';
@@ -23,60 +58,76 @@ export function SwissTestPage() {
     document.body.style.overflow = 'auto';
     document.body.style.height = 'auto';
     const root = document.getElementById('root');
-    if (root) {
-      root.style.overflow = 'auto';
-      root.style.height = 'auto';
-    }
+    if (root) { root.style.overflow = 'auto'; root.style.height = 'auto'; }
     return () => {
       document.documentElement.style.overflow = '';
       document.documentElement.style.height = '';
       document.body.style.overflow = '';
       document.body.style.height = '';
-      if (root) {
-        root.style.overflow = '';
-        root.style.height = '';
-      }
+      if (root) { root.style.overflow = ''; root.style.height = ''; }
     };
   }, []);
 
-  const refresh = useCallback(async () => {
-    if (!tournament?.id) return;
-    try {
-      const t = await tournamentApi.getTournament(tournament.id);
-      setTournament(t);
-    } catch (e: any) {
-      setError(e.message);
+  const checkHealth = useCallback(async () => {
+    if (!isColyseusConfigured()) {
+      setHealthError('VITE_COLYSEUS_URL not configured');
+      return;
     }
-  }, [tournament?.id]);
+    try {
+      const status = await tournamentApi.getHealthStatus();
+      setHealth(status);
+      setHealthError(null);
+    } catch (e: any) {
+      setHealthError(e.message || 'Cannot reach server');
+      setHealth(null);
+    }
+  }, []);
+
+  const loadTournaments = useCallback(async () => {
+    try {
+      const list = await tournamentApi.listTournaments();
+      setTournaments(list);
+    } catch { /* silent - health will show the issue */ }
+  }, []);
 
   useEffect(() => {
-    tournamentApi.getEngineStatus().then(setEngineStatus).catch(() => {});
+    checkHealth();
+    loadTournaments();
     tournamentApi.listPresets().then(setPresets).catch(() => {});
-    tournamentApi.listTournaments().then(setTournaments).catch(() => {});
   }, []);
+
+  const refresh = useCallback(async () => {
+    requestRefresh();
+    if (selectedId) {
+      try {
+        const t = await tournamentApi.getTournament(selectedId);
+        // Room will update via state sync, but force update for immediate feedback
+      } catch (e: any) {
+        setError(e.message);
+      }
+    }
+  }, [selectedId, requestRefresh]);
 
   const createNew = async () => {
     try {
-      const t = await tournamentApi.createTournament('New Tournament');
-      setTournament(t);
-      setDiagnostics(null);
       setError(null);
-      const list = await tournamentApi.listTournaments();
-      setTournaments(list);
+      const t = await tournamentApi.createTournament('Swiss Test');
+      setSelectedId(t.id);
+      setDiagnostics(null);
+      await loadTournaments();
     } catch (e: any) {
       setError(e.message);
     }
   };
 
   const deleteTournament = async () => {
-    if (!tournament?.id) return;
+    if (!selectedId) return;
     if (!confirm('Delete this tournament?')) return;
     try {
-      await tournamentApi.deleteTournament(tournament.id);
-      setTournament(null);
+      await tournamentApi.deleteTournament(selectedId);
+      setSelectedId(null);
       setDiagnostics(null);
-      const list = await tournamentApi.listTournaments();
-      setTournaments(list);
+      await loadTournaments();
     } catch (e: any) {
       setError(e.message);
     }
@@ -104,9 +155,8 @@ export function SwissTestPage() {
         const text = await file.text();
         const data = JSON.parse(text);
         const t = await tournamentApi.importTournament(data);
-        setTournament(t);
-        const list = await tournamentApi.listTournaments();
-        setTournaments(list);
+        setSelectedId(t.id);
+        await loadTournaments();
       } catch (err: any) {
         setError(err.message);
       }
@@ -119,9 +169,12 @@ export function SwissTestPage() {
     setError(null);
     try {
       const result = await fn();
-      if (result?.tournament) setTournament(result.tournament);
+      if (result?.tournament) {
+        // Room will auto-sync, but also update tournaments list
+      }
       if (result?.diagnostics) setDiagnostics(result.diagnostics);
-      else await refresh();
+      requestRefresh();
+      await loadTournaments();
     } catch (e: any) {
       setError(e.message);
       try {
@@ -132,6 +185,8 @@ export function SwissTestPage() {
       setLoading(false);
     }
   };
+
+  const endpoint = isColyseusConfigured() ? getColyseusHttpUrl() : 'Not configured';
 
   return (
     <div style={{ minHeight: '100vh', background: '#020617', color: '#e2e8f0' }}>
@@ -144,9 +199,18 @@ export function SwissTestPage() {
             <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
               FIDE Dutch System
             </span>
+            {connected ? (
+              <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
+                <Wifi className="w-3 h-3" /> Live
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+                <WifiOff className="w-3 h-3" /> Disconnected
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={createNew} className="btn-sm btn-primary" title="New tournament">
+            <button onClick={createNew} className="btn-sm btn-primary" title="New tournament" disabled={!health?.tournamentService}>
               <Plus className="w-4 h-4" />
             </button>
             <button onClick={refresh} className="btn-sm btn-ghost" title="Refresh" disabled={!tournament}>
@@ -166,6 +230,30 @@ export function SwissTestPage() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+        {/* Health status bar */}
+        <div className="flex flex-wrap items-center gap-2 p-3 rounded-lg bg-slate-900/80 border border-slate-700/50">
+          <span className="text-xs text-slate-500 mr-2">Server Status:</span>
+          {healthError ? (
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs bg-red-900/30 text-red-300 border border-red-700/50">
+              <XCircle className="w-3 h-3" /> {healthError}
+            </span>
+          ) : (
+            <>
+              <StatusBadge ok={health?.server ?? null} label="Colyseus Cloud" />
+              <StatusBadge ok={health?.tournamentService ?? null} label="Tournament" />
+              <StatusBadge ok={health?.database ?? null} label="Database" detail={health?.databaseError} />
+              <StatusBadge ok={health?.pairingEngine ?? null} label="Pairing Engine" detail={health?.engineError} />
+              {health?.engineVersion && (
+                <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                  bbpPairings {health.engineVersion}
+                </span>
+              )}
+              <StatusBadge ok={health?.checkerAvailable ?? null} label="Checker" />
+            </>
+          )}
+          <span className="ml-auto text-[10px] text-slate-600 font-mono">{endpoint}</span>
+        </div>
+
         {/* Tournament selector */}
         {tournaments.length > 0 && (
           <div className="flex items-center gap-2 flex-wrap">
@@ -173,9 +261,9 @@ export function SwissTestPage() {
             {tournaments.map(t => (
               <button
                 key={t.id}
-                onClick={() => { setTournament(t); setDiagnostics(null); setError(null); }}
+                onClick={() => { setSelectedId(t.id); setDiagnostics(null); setError(null); }}
                 className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
-                  tournament?.id === t.id
+                  selectedId === t.id
                     ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
                     : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
                 }`}
@@ -197,17 +285,16 @@ export function SwissTestPage() {
           <div className="text-center py-20">
             <Trophy className="w-16 h-16 mx-auto mb-4 text-slate-600" />
             <p className="text-lg text-slate-400">Create or select a tournament to begin</p>
-            <button onClick={createNew} className="mt-4 btn-sm btn-primary inline-flex">
+            <button onClick={createNew} className="mt-4 btn-sm btn-primary inline-flex" disabled={!health?.tournamentService}>
               <Plus className="w-4 h-4" /> Create Tournament
             </button>
           </div>
         ) : (
           <div className="space-y-6">
-            {/* Config & Players (side by side on large screens) */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <ConfigSection
                 tournament={tournament}
-                engineStatus={engineStatus}
+                engineStatus={null}
                 onAction={handleAction}
               />
               <PlayersSection
@@ -218,7 +305,6 @@ export function SwissTestPage() {
               />
             </div>
 
-            {/* Rounds */}
             {tournament.rounds?.length > 0 && (
               <RoundSection
                 tournament={tournament}
@@ -227,19 +313,14 @@ export function SwissTestPage() {
               />
             )}
 
-            {/* Standings */}
             {tournament.standings?.length > 0 && (
-              <StandingsSection
-                tournament={tournament}
-              />
+              <StandingsSection tournament={tournament} />
             )}
 
-            {/* Diagnostics */}
             {diagnostics && (
               <DiagnosticsSection diagnostics={diagnostics} />
             )}
 
-            {/* Player Summary (final) */}
             {tournament.status === 'finished' && (
               <PlayerSummary tournament={tournament} />
             )}

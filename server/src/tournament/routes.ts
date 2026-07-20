@@ -1,13 +1,67 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import * as service from './service.js';
 import { PRESETS } from './presets.js';
+import { checkPersistenceHealth, isPersistenceAvailable } from './persistence.js';
+import { getEngineStatus } from './engine.js';
 import type { GameResult, RoundMode, Color } from './types.js';
+import { createClient } from '@supabase/supabase-js';
 
 export const tournamentRouter = Router();
 
+// --- Auth middleware ---
+// Validates Supabase JWT from Authorization header
+async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'Missing authorization token' });
+    return;
+  }
+  const token = authHeader.replace('Bearer ', '');
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    res.status(500).json({ error: 'Server auth not configured' });
+    return;
+  }
+  try {
+    const supabase = createClient(url, key);
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) {
+      res.status(401).json({ error: 'Invalid token' });
+      return;
+    }
+    (req as any).userId = data.user.id;
+    next();
+  } catch (e: any) {
+    res.status(401).json({ error: 'Auth verification failed' });
+  }
+}
+
+// --- Health check (no auth required) ---
+tournamentRouter.get('/health', async (_req, res) => {
+  const [engineStatus, dbHealth] = await Promise.all([
+    getEngineStatus(),
+    isPersistenceAvailable() ? checkPersistenceHealth() : Promise.resolve({ ok: false, error: 'Not configured' }),
+  ]);
+
+  res.json({
+    server: true,
+    tournamentService: true,
+    database: dbHealth.ok,
+    databaseError: dbHealth.error || null,
+    pairingEngine: engineStatus.available,
+    engineVersion: engineStatus.version,
+    engineError: engineStatus.error || null,
+    checkerAvailable: engineStatus.dutchSupported,
+  });
+});
+
+// All mutation routes require auth
+tournamentRouter.use(requireAuth);
+
 // Engine status
 tournamentRouter.get('/engine-status', async (_req, res) => {
-  const status = await service.getEngineStatus();
+  const status = await getEngineStatus();
   res.json(status);
 });
 
@@ -16,36 +70,38 @@ tournamentRouter.get('/presets', (_req, res) => {
   res.json(PRESETS);
 });
 
-// List tournaments
-tournamentRouter.get('/tournaments', (_req, res) => {
-  res.json(service.listTournaments());
+// List test tournaments
+tournamentRouter.get('/tournaments', async (_req, res) => {
+  const list = await service.listTournaments();
+  res.json(list);
 });
 
 // Get tournament
-tournamentRouter.get('/tournaments/:id', (req, res) => {
-  const t = service.getTournament(req.params.id);
+tournamentRouter.get('/tournaments/:id', async (req, res) => {
+  const t = await service.getTournament(req.params.id);
   if (!t) return res.status(404).json({ error: 'Not found' });
   res.json(t);
 });
 
 // Create tournament
-tournamentRouter.post('/tournaments', (req, res) => {
+tournamentRouter.post('/tournaments', async (req, res) => {
   const { name } = req.body;
-  const t = service.createTournament(name || 'Swiss Test');
+  const userId = (req as any).userId;
+  const t = await service.createTournament(name || 'Swiss Test', userId);
   res.json(t);
 });
 
 // Delete tournament
-tournamentRouter.delete('/tournaments/:id', (req, res) => {
-  service.deleteTournament(req.params.id);
+tournamentRouter.delete('/tournaments/:id', async (req, res) => {
+  await service.deleteTournament(req.params.id);
   res.json({ ok: true });
 });
 
 // Add player
-tournamentRouter.post('/tournaments/:id/players', (req, res) => {
+tournamentRouter.post('/tournaments/:id/players', async (req, res) => {
   try {
     const { name, rating } = req.body;
-    const player = service.addPlayer(req.params.id, name, rating);
+    const player = await service.addPlayer(req.params.id, name, rating);
     res.json(player);
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -53,9 +109,9 @@ tournamentRouter.post('/tournaments/:id/players', (req, res) => {
 });
 
 // Remove player
-tournamentRouter.delete('/tournaments/:id/players/:playerId', (req, res) => {
+tournamentRouter.delete('/tournaments/:id/players/:playerId', async (req, res) => {
   try {
-    service.removePlayer(req.params.id, req.params.playerId);
+    await service.removePlayer(req.params.id, req.params.playerId);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -63,10 +119,10 @@ tournamentRouter.delete('/tournaments/:id/players/:playerId', (req, res) => {
 });
 
 // Update player
-tournamentRouter.put('/tournaments/:id/players/:playerId', (req, res) => {
+tournamentRouter.put('/tournaments/:id/players/:playerId', async (req, res) => {
   try {
     const { name, rating } = req.body;
-    service.updatePlayer(req.params.id, req.params.playerId, name, rating);
+    await service.updatePlayer(req.params.id, req.params.playerId, name, rating);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -74,9 +130,9 @@ tournamentRouter.put('/tournaments/:id/players/:playerId', (req, res) => {
 });
 
 // Clear players
-tournamentRouter.delete('/tournaments/:id/players', (req, res) => {
+tournamentRouter.delete('/tournaments/:id/players', async (req, res) => {
   try {
-    service.clearPlayers(req.params.id);
+    await service.clearPlayers(req.params.id);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -84,17 +140,17 @@ tournamentRouter.delete('/tournaments/:id/players', (req, res) => {
 });
 
 // Load preset
-tournamentRouter.post('/tournaments/:id/load-preset', (req, res) => {
+tournamentRouter.post('/tournaments/:id/load-preset', async (req, res) => {
   try {
     const { presetIndex } = req.body;
     const preset = PRESETS[presetIndex];
     if (!preset) return res.status(400).json({ error: 'Invalid preset index' });
 
-    service.clearPlayers(req.params.id);
+    await service.clearPlayers(req.params.id);
     for (const p of preset.players) {
-      service.addPlayer(req.params.id, p.name, p.rating);
+      await service.addPlayer(req.params.id, p.name, p.rating);
     }
-    const t = service.getTournament(req.params.id);
+    const t = await service.getTournament(req.params.id);
     res.json(t);
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -102,10 +158,10 @@ tournamentRouter.post('/tournaments/:id/load-preset', (req, res) => {
 });
 
 // Set round mode
-tournamentRouter.post('/tournaments/:id/round-mode', (req, res) => {
+tournamentRouter.post('/tournaments/:id/round-mode', async (req, res) => {
   try {
     const { mode, manualCount } = req.body;
-    service.setRoundMode(req.params.id, mode as RoundMode, manualCount);
+    await service.setRoundMode(req.params.id, mode as RoundMode, manualCount);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -113,10 +169,10 @@ tournamentRouter.post('/tournaments/:id/round-mode', (req, res) => {
 });
 
 // Set initial color
-tournamentRouter.post('/tournaments/:id/initial-color', (req, res) => {
+tournamentRouter.post('/tournaments/:id/initial-color', async (req, res) => {
   try {
     const { color } = req.body;
-    service.setInitialColor(req.params.id, color as Color | 'random');
+    await service.setInitialColor(req.params.id, color as Color | 'random');
     res.json({ ok: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -124,8 +180,8 @@ tournamentRouter.post('/tournaments/:id/initial-color', (req, res) => {
 });
 
 // Get round info
-tournamentRouter.get('/tournaments/:id/round-info', (req, res) => {
-  const t = service.getTournament(req.params.id);
+tournamentRouter.get('/tournaments/:id/round-info', async (req, res) => {
+  const t = await service.getTournament(req.params.id);
   if (!t) return res.status(404).json({ error: 'Not found' });
   const playerCount = t.players.filter(p => p.status === 'active').length;
   const info = service.getRoundInfo(playerCount, t.config.roundMode, t.config.totalRounds || undefined);
@@ -138,7 +194,7 @@ tournamentRouter.post('/tournaments/:id/start', async (req, res) => {
   if (!result.success) {
     return res.status(400).json({ error: result.error, diagnostics: result.diagnostics });
   }
-  const t = service.getTournament(req.params.id);
+  const t = await service.getTournament(req.params.id);
   res.json({ ok: true, tournament: t, diagnostics: result.diagnostics });
 });
 
@@ -148,22 +204,22 @@ tournamentRouter.post('/tournaments/:id/next-round', async (req, res) => {
   if (!result.success) {
     return res.status(400).json({ error: result.error, diagnostics: result.diagnostics });
   }
-  const t = service.getTournament(req.params.id);
+  const t = await service.getTournament(req.params.id);
   res.json({ ok: true, tournament: t, diagnostics: result.diagnostics });
 });
 
 // Set result
-tournamentRouter.post('/tournaments/:id/rounds/:round/boards/:board/result', (req, res) => {
+tournamentRouter.post('/tournaments/:id/rounds/:round/boards/:board/result', async (req, res) => {
   try {
     const { result, isPlayed } = req.body;
-    service.setResult(
+    await service.setResult(
       req.params.id,
       parseInt(req.params.round),
       parseInt(req.params.board),
       result as GameResult,
       isPlayed !== false
     );
-    const t = service.getTournament(req.params.id);
+    const t = await service.getTournament(req.params.id);
     res.json({ ok: true, tournament: t });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -171,20 +227,20 @@ tournamentRouter.post('/tournaments/:id/rounds/:round/boards/:board/result', (re
 });
 
 // Finalize round
-tournamentRouter.post('/tournaments/:id/rounds/:round/finalize', (req, res) => {
-  const result = service.finalizeRound(req.params.id, parseInt(req.params.round));
+tournamentRouter.post('/tournaments/:id/rounds/:round/finalize', async (req, res) => {
+  const result = await service.finalizeRound(req.params.id, parseInt(req.params.round));
   if (!result.success) {
     return res.status(400).json({ error: result.error });
   }
-  const t = service.getTournament(req.params.id);
+  const t = await service.getTournament(req.params.id);
   res.json({ ok: true, tournament: t, standings: result.standings });
 });
 
 // Withdraw player
-tournamentRouter.post('/tournaments/:id/players/:playerId/withdraw', (req, res) => {
+tournamentRouter.post('/tournaments/:id/players/:playerId/withdraw', async (req, res) => {
   try {
-    service.withdrawPlayer(req.params.id, req.params.playerId);
-    const t = service.getTournament(req.params.id);
+    await service.withdrawPlayer(req.params.id, req.params.playerId);
+    const t = await service.getTournament(req.params.id);
     res.json({ ok: true, tournament: t });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -192,29 +248,29 @@ tournamentRouter.post('/tournaments/:id/players/:playerId/withdraw', (req, res) 
 });
 
 // Correct round
-tournamentRouter.post('/tournaments/:id/rounds/:round/correct', (req, res) => {
-  const result = service.correctRound(req.params.id, parseInt(req.params.round));
+tournamentRouter.post('/tournaments/:id/rounds/:round/correct', async (req, res) => {
+  const result = await service.correctRound(req.params.id, parseInt(req.params.round));
   if (!result.success) {
     return res.status(400).json({ error: result.error });
   }
-  const t = service.getTournament(req.params.id);
+  const t = await service.getTournament(req.params.id);
   res.json({ ok: true, tournament: t });
 });
 
 // Get player histories
-tournamentRouter.get('/tournaments/:id/histories', (req, res) => {
+tournamentRouter.get('/tournaments/:id/histories', async (req, res) => {
   const histories = service.getPlayerHistories(req.params.id);
   if (!histories) return res.status(404).json({ error: 'Not found' });
-  // Convert Map to object
   const obj: Record<number, any> = {};
   histories.forEach((v, k) => { obj[k] = v; });
   res.json(obj);
 });
 
-// Import tournament (for persistence across reloads)
-tournamentRouter.post('/tournaments/import', (req, res) => {
+// Import tournament
+tournamentRouter.post('/tournaments/import', async (req, res) => {
   try {
-    const t = service.importTournament(req.body);
+    const userId = (req as any).userId;
+    const t = await service.importTournament(req.body, userId);
     res.json(t);
   } catch (e: any) {
     res.status(400).json({ error: e.message });
