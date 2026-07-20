@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import * as service from './service.js';
 import { PRESETS } from './presets.js';
 import { checkPersistenceHealth, isPersistenceAvailable } from './persistence.js';
-import { getEngineStatus } from './engine.js';
+import { getEngineStatus, getEngineDiagnostics, runFixtureTest, resetEngineCache } from './engine.js';
 import type { GameResult, RoundMode, Color } from './types.js';
 import { createClient } from '@supabase/supabase-js';
 
@@ -39,6 +39,7 @@ async function requireAuth(req: Request, res: Response, next: NextFunction): Pro
 
 // --- Health check (no auth required) ---
 tournamentRouter.get('/health', async (_req, res) => {
+  resetEngineCache();
   const [engineStatus, dbHealth] = await Promise.all([
     getEngineStatus(),
     isPersistenceAvailable() ? checkPersistenceHealth() : Promise.resolve({ ok: false, error: 'Not configured' }),
@@ -52,15 +53,60 @@ tournamentRouter.get('/health', async (_req, res) => {
     pairingEngine: engineStatus.available,
     engineVersion: engineStatus.version,
     engineError: engineStatus.error || null,
-    checkerAvailable: engineStatus.dutchSupported,
+    checkerAvailable: engineStatus.checkerAvailable,
+    platform: engineStatus.platform,
+    arch: engineStatus.arch,
+  });
+});
+
+// --- Detailed engine diagnostics (no auth - non-sensitive) ---
+tournamentRouter.get('/engine-diagnostics', async (_req, res) => {
+  resetEngineCache();
+  const [diag, fixture] = await Promise.all([
+    getEngineDiagnostics(),
+    runFixtureTest().catch((e: any) => ({
+      dutchOk: false,
+      checkerOk: false,
+      dutchOutput: '',
+      checkerOutput: '',
+      dutchError: e.message,
+      checkerError: null,
+      durationMs: 0,
+    })),
+  ]);
+
+  // For frontend: only non-sensitive info
+  res.json({
+    platform: diag.platform,
+    arch: diag.arch,
+    fileExists: diag.fileExists,
+    fileSize: diag.fileSize,
+    filePermissions: diag.filePermissions,
+    executableBit: diag.executableBit,
+    diagnosis: diag.diagnosis,
+    spawnErrorCode: diag.spawnErrorCode,
+    exitCode: diag.exitCode,
+    signal: diag.signal,
+    timedOut: diag.timedOut,
+    durationMs: diag.durationMs,
+    stdout: diag.stdout.slice(0, 500),
+    stderr: diag.stderr.slice(0, 500),
+    fixture: {
+      dutchOk: fixture.dutchOk,
+      checkerOk: fixture.checkerOk,
+      dutchError: fixture.dutchError,
+      checkerError: fixture.checkerError,
+      durationMs: fixture.durationMs,
+    },
   });
 });
 
 // All mutation routes require auth
 tournamentRouter.use(requireAuth);
 
-// Engine status
+// Engine status (detailed, requires auth)
 tournamentRouter.get('/engine-status', async (_req, res) => {
+  resetEngineCache();
   const status = await getEngineStatus();
   res.json(status);
 });

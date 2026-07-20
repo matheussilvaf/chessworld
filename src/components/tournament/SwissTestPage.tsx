@@ -19,6 +19,8 @@ interface HealthStatus {
   engineVersion: string | null;
   engineError: string | null;
   checkerAvailable: boolean;
+  platform: string | null;
+  arch: string | null;
 }
 
 function StatusBadge({ ok, label, detail }: { ok: boolean | null; label: string; detail?: string | null }) {
@@ -40,6 +42,15 @@ function StatusBadge({ ok, label, detail }: { ok: boolean | null; label: string;
   );
 }
 
+function DiagBox({ label, value, ok }: { label: string; value: any; ok?: boolean }) {
+  return (
+    <div className="bg-black/30 rounded p-1.5">
+      <p className="text-slate-500 text-[9px] uppercase">{label}</p>
+      <p className={`font-bold ${ok === true ? 'text-emerald-400' : ok === false ? 'text-red-400' : 'text-slate-300'}`}>{value ?? '-'}</p>
+    </div>
+  );
+}
+
 export function SwissTestPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tournaments, setTournaments] = useState<any[]>([]);
@@ -49,6 +60,8 @@ export function SwissTestPage() {
   const [loading, setLoading] = useState(false);
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [engineDiag, setEngineDiag] = useState<any>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
 
   const { tournament, connected, requestRefresh } = useTournamentRoom(selectedId);
 
@@ -88,6 +101,18 @@ export function SwissTestPage() {
       const list = await tournamentApi.listTournaments();
       setTournaments(list);
     } catch { /* silent - health will show the issue */ }
+  }, []);
+
+  const fetchEngineDiag = useCallback(async () => {
+    setDiagLoading(true);
+    try {
+      const diag = await tournamentApi.getEngineDiagnostics();
+      setEngineDiag(diag);
+    } catch (e: any) {
+      setEngineDiag({ error: e.message || 'Cannot reach server' });
+    } finally {
+      setDiagLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -249,9 +274,81 @@ export function SwissTestPage() {
                 </span>
               )}
               <StatusBadge ok={health?.checkerAvailable ?? null} label="Checker" />
+              {health?.platform && (
+                <span className="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 border border-slate-700">
+                  {health.platform}/{health.arch}
+                </span>
+              )}
             </>
           )}
           <span className="ml-auto text-[10px] text-slate-600 font-mono">{endpoint}</span>
+        </div>
+
+        {/* Engine Diagnostics Panel */}
+        <div className="mb-4">
+          <button
+            onClick={fetchEngineDiag}
+            disabled={diagLoading}
+            className="text-xs px-3 py-1.5 rounded bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700 hover:text-slate-300 transition-colors disabled:opacity-50"
+          >
+            {diagLoading ? 'Loading...' : 'Run Engine Diagnostics'}
+          </button>
+          {engineDiag && (
+            <div className="mt-2 bg-slate-900 border border-slate-700 rounded-lg p-4 text-xs font-mono space-y-2">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+                <DiagBox label="Platform" value={engineDiag.platform} />
+                <DiagBox label="Arch" value={engineDiag.arch} />
+                <DiagBox label="File Exists" value={engineDiag.fileExists ? 'Yes' : 'No'} ok={engineDiag.fileExists} />
+                <DiagBox label="Executable" value={engineDiag.executableBit ? 'Yes' : 'No'} ok={engineDiag.executableBit} />
+                <DiagBox label="File Size" value={engineDiag.fileSize ? `${(engineDiag.fileSize / 1024 / 1024).toFixed(1)} MB` : '-'} />
+                <DiagBox label="Permissions" value={engineDiag.filePermissions || '-'} />
+                <DiagBox label="Exit Code" value={engineDiag.exitCode ?? '-'} />
+                <DiagBox label="Duration" value={`${engineDiag.durationMs}ms`} />
+              </div>
+              <div>
+                <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${
+                  engineDiag.diagnosis === 'OK' ? 'bg-emerald-900/50 text-emerald-300' : 'bg-red-900/50 text-red-300'
+                }`}>
+                  {engineDiag.diagnosis || 'Unknown'}
+                </span>
+                {engineDiag.spawnErrorCode && (
+                  <span className="ml-2 text-red-400">Code: {engineDiag.spawnErrorCode}</span>
+                )}
+                {engineDiag.signal && (
+                  <span className="ml-2 text-amber-400">Signal: {engineDiag.signal}</span>
+                )}
+              </div>
+              {engineDiag.stdout && (
+                <div>
+                  <p className="text-slate-500 mb-0.5">stdout:</p>
+                  <pre className="bg-black/50 rounded p-2 text-slate-400 overflow-x-auto whitespace-pre-wrap">{engineDiag.stdout}</pre>
+                </div>
+              )}
+              {engineDiag.stderr && (
+                <div>
+                  <p className="text-slate-500 mb-0.5">stderr:</p>
+                  <pre className="bg-black/50 rounded p-2 text-red-400 overflow-x-auto whitespace-pre-wrap">{engineDiag.stderr}</pre>
+                </div>
+              )}
+              {engineDiag.fixture && (
+                <div className="border-t border-slate-700 pt-2 mt-2">
+                  <p className="text-slate-400 font-semibold mb-1">Fixture Test</p>
+                  <div className="flex gap-3">
+                    <span className={engineDiag.fixture.dutchOk ? 'text-emerald-400' : 'text-red-400'}>
+                      Dutch: {engineDiag.fixture.dutchOk ? 'OK' : `FAIL${engineDiag.fixture.dutchError ? ` - ${engineDiag.fixture.dutchError}` : ''}`}
+                    </span>
+                    <span className={engineDiag.fixture.checkerOk ? 'text-emerald-400' : 'text-red-400'}>
+                      Checker: {engineDiag.fixture.checkerOk ? 'OK' : `FAIL${engineDiag.fixture.checkerError ? ` - ${engineDiag.fixture.checkerError}` : ''}`}
+                    </span>
+                    <span className="text-slate-500">{engineDiag.fixture.durationMs}ms</span>
+                  </div>
+                </div>
+              )}
+              {engineDiag.error && (
+                <p className="text-red-400">{engineDiag.error}</p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Tournament selector */}

@@ -42,6 +42,7 @@ async function requestNoAuth(method: string, path: string) {
 export const tournamentApi = {
   isConfigured: () => isColyseusConfigured(),
   getHealthStatus: () => requestNoAuth('GET', '/health'),
+  getEngineDiagnostics: () => requestNoAuth('GET', '/engine-diagnostics'),
   getEngineStatus: () => request('GET', '/engine-status'),
   listPresets: () => request('GET', '/presets'),
   listTournaments: () => request('GET', '/tournaments'),
