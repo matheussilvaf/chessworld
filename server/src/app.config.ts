@@ -11,6 +11,7 @@ import { tournamentRouter } from "./tournament/routes.js";
 const config: ConfigOptions = {
   initializeGameServer: (gameServer) => {
     gameServer.define("world", WorldRoom).filterBy(["region"]);
+    gameServer.define("arena", WorldRoom).filterBy(["region"]);
     gameServer.define("tournament", TournamentRoom).filterBy(["tournamentId"]);
   },
 

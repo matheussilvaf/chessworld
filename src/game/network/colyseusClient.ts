@@ -19,10 +19,24 @@ function getClient(): Client {
 }
 
 let worldRoom: Room<any> | null = null;
+let arenaRoom: Room<any> | null = null;
+let activeRoomType: 'world' | 'arena' = 'world';
 let joinInProgress: Promise<Room<any>> | null = null;
+
+export function getActiveRoom(): Room<any> | null {
+  return activeRoomType === 'arena' ? arenaRoom : worldRoom;
+}
+
+export function getActiveRoomType(): 'world' | 'arena' {
+  return activeRoomType;
+}
 
 export function getWorldRoom(): Room<any> | null {
   return worldRoom;
+}
+
+export function getArenaRoom(): Room<any> | null {
+  return arenaRoom;
 }
 
 export async function joinWorldRoom(options: {
@@ -38,7 +52,8 @@ export async function joinWorldRoom(options: {
   }
 
   if (worldRoom) {
-    console.log('[Colyseus] Already connected, reusing existing room');
+    console.log('[Colyseus] Already connected to world, reusing');
+    activeRoomType = 'world';
     return worldRoom;
   }
 
@@ -48,14 +63,13 @@ export async function joinWorldRoom(options: {
   }
 
   console.log(`[Colyseus] joining world region: ${options.region}`);
-
   joinInProgress = getClient().joinOrCreate('world', options);
 
   try {
     const room = await joinInProgress;
     worldRoom = room;
-    console.log(`[Colyseus] roomId: ${room.roomId}`);
-    console.log(`[Colyseus] sessionId: ${room.sessionId}`);
+    activeRoomType = 'world';
+    console.log(`[Colyseus] world roomId: ${room.roomId}, sessionId: ${room.sessionId}`);
     return room;
   } finally {
     joinInProgress = null;
@@ -64,16 +78,53 @@ export async function joinWorldRoom(options: {
 
 export async function leaveWorldRoom(): Promise<void> {
   joinInProgress = null;
-
   if (worldRoom) {
     const room = worldRoom;
     worldRoom = null;
-    console.log(`[Colyseus] Leaving room: ${room.roomId}`);
+    console.log(`[Colyseus] Leaving world room: ${room.roomId}`);
     try {
       await room.leave(true);
-      console.log('[Colyseus] Left room successfully');
     } catch (e) {
-      console.warn('[Colyseus] Error during leave (ignored):', e);
+      console.warn('[Colyseus] Error leaving world room:', e);
+    }
+  }
+}
+
+export async function joinArenaRoom(options: {
+  playerId: string;
+  username: string;
+  rating: number;
+  region: string;
+  x: number;
+  y: number;
+}): Promise<Room<any>> {
+  if (!isColyseusConfigured()) {
+    throw new Error('VITE_COLYSEUS_URL is not configured');
+  }
+
+  if (arenaRoom) {
+    console.log('[Colyseus] Already connected to arena, reusing');
+    activeRoomType = 'arena';
+    return arenaRoom;
+  }
+
+  console.log(`[Colyseus] joining arena region: ${options.region}`);
+  const room = await getClient().joinOrCreate('arena', options);
+  arenaRoom = room;
+  activeRoomType = 'arena';
+  console.log(`[Colyseus] arena roomId: ${room.roomId}, sessionId: ${room.sessionId}`);
+  return room;
+}
+
+export async function leaveArenaRoom(): Promise<void> {
+  if (arenaRoom) {
+    const room = arenaRoom;
+    arenaRoom = null;
+    console.log(`[Colyseus] Leaving arena room: ${room.roomId}`);
+    try {
+      await room.leave(true);
+    } catch (e) {
+      console.warn('[Colyseus] Error leaving arena room:', e);
     }
   }
 }
@@ -86,7 +137,7 @@ export function sendMovement(data: {
   direction: string;
   isMoving: boolean;
 }) {
-  worldRoom?.send('move_to', data);
+  getActiveRoom()?.send('move_to', data);
 }
 
 export function sendCreateChallenge(data: {
@@ -97,49 +148,45 @@ export function sendCreateChallenge(data: {
   timeLabel: string;
   side?: 'w' | 'b' | 'random';
 }) {
-  worldRoom?.send('create_challenge', data);
+  getActiveRoom()?.send('create_challenge', data);
 }
 
 export function sendAcceptChallenge(boardId: string) {
-  worldRoom?.send('accept_challenge', { boardId });
+  getActiveRoom()?.send('accept_challenge', { boardId });
 }
 
 export function sendBoardCancel(boardId: string) {
-  worldRoom?.send('cancel_waiting', { boardId });
+  getActiveRoom()?.send('cancel_waiting', { boardId });
 }
 
 export function sendChessMove(matchId: string, from: string, to: string, promotion?: string) {
-  worldRoom?.send('chess_move', { matchId, from, to, promotion });
+  getActiveRoom()?.send('chess_move', { matchId, from, to, promotion });
 }
 
 export function sendResign(matchId: string) {
-  worldRoom?.send('chess_resign', { matchId });
+  getActiveRoom()?.send('chess_resign', { matchId });
 }
 
 export function sendDrawOffer(matchId: string) {
-  worldRoom?.send('chess_draw_offer', { matchId });
+  getActiveRoom()?.send('chess_draw_offer', { matchId });
 }
 
 export function sendDrawAccept(matchId: string) {
-  worldRoom?.send('chess_draw_accept', { matchId });
+  getActiveRoom()?.send('chess_draw_accept', { matchId });
 }
 
 export function sendChat(message: string) {
-  worldRoom?.send('chat', { message });
+  getActiveRoom()?.send('chat', { message });
 }
 
 export function sendSitSpectator(boardId: string, seatKey: string) {
-  worldRoom?.send('sit_spectator', { boardId, seatKey });
+  getActiveRoom()?.send('sit_spectator', { boardId, seatKey });
 }
 
 export function sendLeaveSeat(boardId: string) {
-  worldRoom?.send('leave_seat', { boardId });
+  getActiveRoom()?.send('leave_seat', { boardId });
 }
 
 export function registerBoards(boards: { id: string; name: string; x: number; y: number; width?: number; height?: number }[]) {
-  worldRoom?.send('register_boards', { boards });
-}
-
-export function sendChangeMap(mapKey: string) {
-  worldRoom?.send('change_map', { mapKey });
+  getActiveRoom()?.send('register_boards', { boards });
 }

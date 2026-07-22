@@ -13,7 +13,6 @@ export class PlayerState extends Schema {
   direction!: string;
   isMoving!: boolean;
   currentBoardId!: string;
-  currentMap!: string;
 
   constructor() {
     super();
@@ -29,7 +28,6 @@ export class PlayerState extends Schema {
     this.direction = 'down';
     this.isMoving = false;
     this.currentBoardId = '';
-    this.currentMap = 'main_world';
   }
 }
 
@@ -46,5 +44,4 @@ defineTypes(PlayerState, {
   direction: 'string',
   isMoving: 'boolean',
   currentBoardId: 'string',
-  currentMap: 'string',
 });

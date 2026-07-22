@@ -6,7 +6,15 @@ import { useAuthStore } from '../stores/authStore';
 import { useChessStore } from '../stores/chessStore';
 import { useGameSettingsStore } from '../stores/gameSettingsStore';
 import { useInteractionStore } from '../stores/interactionStore';
-import { getWorldRoom, registerBoards, sendMovement, sendChangeMap } from '../game/network/colyseusClient';
+import {
+  getActiveRoom,
+  joinArenaRoom,
+  leaveArenaRoom,
+  joinWorldRoom,
+  leaveWorldRoom,
+  registerBoards,
+  sendMovement,
+} from '../game/network/colyseusClient';
 import { useColyseusStore } from '../hooks/useColyseusConnection';
 import { loadCharacterConfigs } from '../config/loadCharacterConfigs';
 import type { WorldScene } from '../game/scenes/WorldScene';
@@ -17,6 +25,7 @@ export function GameCanvas() {
   const gameRef = useRef<Phaser.Game | null>(null);
   const sceneReadyRef = useRef(false);
   const listenersSetRef = useRef(false);
+  const transitionInProgressRef = useRef(false);
   const { setSelectedBoard } = useGameStore();
   const { user, profile } = useAuthStore();
   const { region } = useGameStore();
@@ -51,7 +60,6 @@ export function GameCanvas() {
       sceneReadyRef.current = true;
       console.log('[GameCanvas] Scene ready');
 
-      // Wire confirm action for ProximityButton clicks
       useInteractionStore.getState().setConfirmAction(() => {
         scene.confirmProximityInteraction();
       });
@@ -59,13 +67,6 @@ export function GameCanvas() {
       if (user && region) {
         scene.setLocalPlayer(user.id, region);
       }
-
-      // When the player switches maps, notify the server
-      scene.onMapChanged = (mapKey: string) => {
-        sendChangeMap(mapKey);
-        // Hide all remote players until we re-evaluate their map
-        scene.hideAllRemotePlayers();
-      };
 
       scene.onBoardClick = (arenaId: string, arenaTitle: string) => {
         if (!user || !profile || !region) return;
@@ -90,12 +91,10 @@ export function GameCanvas() {
 
       scene.onPositionUpdate = () => {};
 
-      // Wire interaction system events to store
       scene.onInteractionClick = (event) => {
         const interactionStore = useInteractionStore.getState();
         const obj = event.object;
 
-        // Chess table interactions trigger BoardModal
         if (obj.category === 'chess_table' || obj.category === 'player_seat') {
           if (!user || !profile || !region) return;
           const tableId = obj.properties.tableId as string;
@@ -103,12 +102,11 @@ export function GameCanvas() {
           const state = useGameStore.getState();
           if (state.selectedBoard || state.boardLocked) return;
 
-          // Pre-select side based on which element was clicked
           let preSelectedSide: 'w' | 'b' | 'random' = 'random';
           if (obj.category === 'player_seat') {
             const pos = obj.properties.position as string;
-            if (pos === 'top') preSelectedSide = 'b'; // top seat = black
-            else preSelectedSide = 'w'; // bottom seat = white
+            if (pos === 'top') preSelectedSide = 'b';
+            else preSelectedSide = 'w';
           }
 
           setSelectedBoard({
@@ -129,16 +127,13 @@ export function GameCanvas() {
           return;
         }
 
-        // Spectator seat interactions
         if (obj.category === 'spectator_seat') {
           const tableId = obj.properties.tableId as string;
           if (!tableId) return;
           const state = useGameStore.getState();
           const boardState = state.colyseusBoards.find(b => b.id === tableId);
           if (boardState?.status === 'playing' && boardState.matchId) {
-            // Auto-spectate
             useChessStore.getState().openSpectate(boardState.matchId);
-            // Seat as spectator
             const position = obj.properties.position as string;
             const seatKey = position?.includes('left') ? 'left_01' : 'right_01';
             scene.seatPlayer(tableId, 'spectator', seatKey);
@@ -146,7 +141,7 @@ export function GameCanvas() {
           return;
         }
 
-        // For all other interaction categories, handle enter_building action
+        // Enter building: transition to arena room
         if (obj.properties.action === 'enter_building' && obj.properties.targetMap) {
           const targetMap = obj.properties.targetMap as string;
           const targetSpawn = obj.properties.targetSpawn as string;
@@ -155,12 +150,13 @@ export function GameCanvas() {
             mapPath = '/assets/world-v2/tournament_reception.tmj';
           }
           if (mapPath && targetSpawn) {
-            scene.switchMap(mapPath, targetSpawn);
             useInteractionStore.getState().setProximityObject(null);
+            transitionToRoom(scene, 'arena', mapPath, targetSpawn);
             return;
           }
         }
 
+        // Exit building: transition back to world room
         if (obj.properties.action === 'exit_building' && obj.properties.targetMap) {
           const targetMap = obj.properties.targetMap as string;
           const targetSpawn = obj.properties.targetSpawn as string;
@@ -169,13 +165,12 @@ export function GameCanvas() {
             mapPath = '/assets/world-v2/main_world.tmj';
           }
           if (mapPath && targetSpawn) {
-            scene.switchMap(mapPath, targetSpawn);
             useInteractionStore.getState().setProximityObject(null);
+            transitionToRoom(scene, 'world', mapPath, targetSpawn);
             return;
           }
         }
 
-        // Fallback: show debug modal if enabled
         if (interactionStore.debugEnabled) {
           interactionStore.openModal({ object: obj, playerDistance: event.playerDistance });
         }
@@ -211,7 +206,6 @@ export function GameCanvas() {
     };
   }, []);
 
-  // Load and subscribe to game settings (admin-adjustable zoom/speed)
   useEffect(() => {
     const settingsStore = useGameSettingsStore;
     settingsStore.getState().load();
@@ -258,7 +252,7 @@ export function GameCanvas() {
   function tryAttachListeners(scene: WorldScene) {
     if (listenersSetRef.current) return;
 
-    const room = getWorldRoom();
+    const room = getActiveRoom();
     if (!room) return;
 
     if (!room.state) {
@@ -288,6 +282,77 @@ export function GameCanvas() {
     attachListeners(scene, room);
   }
 
+  async function transitionToRoom(
+    scene: WorldScene,
+    targetRoomType: 'world' | 'arena',
+    mapPath: string,
+    targetSpawn: string
+  ) {
+    if (transitionInProgressRef.current) return;
+    transitionInProgressRef.current = true;
+
+    const { user, profile } = useAuthStore.getState();
+    const { region } = useGameStore.getState();
+    if (!user || !region) {
+      transitionInProgressRef.current = false;
+      return;
+    }
+
+    try {
+      // 1. Reset listener flag
+      listenersSetRef.current = false;
+
+      // 2. Destroy all remote players from the old room
+      scene.destroyAllRemotePlayers();
+
+      // 3. Leave the current room
+      if (targetRoomType === 'arena') {
+        await leaveWorldRoom();
+      } else {
+        await leaveArenaRoom();
+      }
+
+      // 4. Switch the visual map
+      await scene.switchMap(mapPath, targetSpawn);
+
+      // 5. Join the new room
+      const pos = scene.getPlayerPosition();
+      const options = {
+        playerId: user.id,
+        username: profile?.username || 'Player',
+        rating: profile?.rating || 1200,
+        region,
+        x: pos.x,
+        y: pos.y,
+      };
+
+      let newRoom: Room<any>;
+      if (targetRoomType === 'arena') {
+        newRoom = await joinArenaRoom(options);
+      } else {
+        newRoom = await joinWorldRoom(options);
+      }
+
+      // 6. Update connection store
+      useColyseusStore.getState().setConnected(newRoom.sessionId, newRoom.roomId);
+
+      // 7. Attach listeners to new room
+      if (!newRoom.state) {
+        newRoom.onStateChange.once(() => {
+          validateAndAttach(scene, newRoom);
+        });
+      } else {
+        validateAndAttach(scene, newRoom);
+      }
+
+      console.log(`[GameCanvas] Room transition complete -> ${targetRoomType}`);
+    } catch (err) {
+      console.error('[GameCanvas] Room transition failed:', err);
+    } finally {
+      transitionInProgressRef.current = false;
+    }
+  }
+
   function attachListeners(scene: WorldScene, room: Room<any>) {
     if (listenersSetRef.current) return;
     listenersSetRef.current = true;
@@ -305,17 +370,12 @@ export function GameCanvas() {
       registerBoards(payload);
     }
 
+    // All players in this room are on the same map - show them unconditionally
     state.players.onAdd((player: any, sessionId: string) => {
       if (sessionId === room.sessionId) {
         updateOnlineCount(room);
         return;
       }
-
-      // Only show the player if they're on the same map as us
-      const localMap = scene.getCurrentMapKey();
-      const remoteMap = player.currentMap || 'main_world';
-      const sameMap = (localMap === 'world' && remoteMap === 'main_world') ||
-                      localMap === remoteMap;
 
       scene.handlePlayerJoined({
         id: player.id,
@@ -331,31 +391,15 @@ export function GameCanvas() {
         isMoving: player.isMoving,
       });
 
-      // Hide if on different map
-      if (!sameMap) {
-        scene.setRemotePlayerVisibility(sessionId, false);
-      }
-
       player.onChange(() => {
-        const currentLocalMap = scene.getCurrentMapKey();
-        const currentRemoteMap = player.currentMap || 'main_world';
-        const nowSameMap = (currentLocalMap === 'world' && currentRemoteMap === 'main_world') ||
-                          currentLocalMap === currentRemoteMap;
-
-        // Update visibility based on map
-        scene.setRemotePlayerVisibility(sessionId, nowSameMap);
-
-        // Only update position if on same map
-        if (nowSameMap) {
-          scene.updateRemotePlayerState(sessionId, {
-            x: player.x,
-            y: player.y,
-            targetX: player.targetX,
-            targetY: player.targetY,
-            direction: player.direction,
-            isMoving: player.isMoving,
-          });
-        }
+        scene.updateRemotePlayerState(sessionId, {
+          x: player.x,
+          y: player.y,
+          targetX: player.targetX,
+          targetY: player.targetY,
+          direction: player.direction,
+          isMoving: player.isMoving,
+        });
       });
 
       updateOnlineCount(room);
@@ -380,17 +424,14 @@ export function GameCanvas() {
       syncBoardsToStore(room);
     });
 
-    // --- Matches ---
     if (state.matches && typeof state.matches.onAdd === 'function') {
       state.matches.onAdd((match: any, _matchId: string) => {
-        // Show overlay immediately when match is added
         if (match.boardId && match.fen && gameRef.current) {
           const ws = getWorldScene(gameRef.current);
           if (ws) ws.updateBoardFEN(match.boardId, match.fen);
         }
         match.onChange(() => {
           useChessStore.getState().syncFromColyseus(match);
-          // Update board overlay with current FEN for ALL clients
           if (match.boardId && match.fen && gameRef.current) {
             const ws = getWorldScene(gameRef.current);
             if (ws) ws.updateBoardFEN(match.boardId, match.fen);
@@ -408,20 +449,16 @@ export function GameCanvas() {
       const userId = useAuthStore.getState().user?.id;
       if (!userId) return;
 
-      // Close the board modal
       useGameStore.getState().setSelectedBoard(null);
       useGameStore.getState().setBoardLocked(false);
 
-      // Open the match in the chess store (enables interaction logic)
       useChessStore.getState().openMatch(data.matchId, data.color, userId, data.boardId);
 
       if (gameRef.current) {
         const worldScene = getWorldScene(gameRef.current);
         if (worldScene && data.boardId) {
-          // Seat at correct side: white=bottom, black=top
           const seat = data.color === 'w' ? 'bottom' : 'top';
           worldScene.seatPlayer(data.boardId, 'player', seat, data.color);
-          // Show initial position and activate interactive overlay
           const initialFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
           worldScene.updateBoardFEN(data.boardId, initialFen);
           worldScene.activateOverlayInteraction(data.boardId, data.color);
@@ -431,9 +468,7 @@ export function GameCanvas() {
 
     room.onMessage('match_finished', (data: any) => {
       useGameStore.getState().setLastEvent(`match_finished: ${data.result}`);
-      // Sync game over state to chessStore
       useChessStore.getState().syncFromColyseus(data);
-      // Unseat and clean up after delay
       setTimeout(() => {
         if (gameRef.current) {
           const worldScene = getWorldScene(gameRef.current);
@@ -450,9 +485,7 @@ export function GameCanvas() {
     });
 
     room.onMessage('challenge_created', (data: any) => {
-      // Store the color assignment
       useGameStore.getState().setChallengeColor(data.color || null);
-      // Seat challenger at their chosen side
       if (gameRef.current && data.boardId) {
         const worldScene = getWorldScene(gameRef.current);
         if (worldScene) {
@@ -511,7 +544,6 @@ function updateBoardVisual(scene: WorldScene, board: any, room?: Room<any>) {
       timeLabel: board.timeLabel,
     });
   } else if (board.status === 'playing') {
-    // Find the match FEN to show on the overlay
     let fen = '';
     if (room?.state?.matches && board.matchId) {
       room.state.matches.forEach((m: any, mId: string) => {
@@ -520,11 +552,9 @@ function updateBoardVisual(scene: WorldScene, board: any, room?: Room<any>) {
         }
       });
     }
-    // Always show the board with pieces - use starting FEN as fallback
     const fenToShow = fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
     scene.updateBoardFEN(board.id, fenToShow);
 
-    // Seat remote players at the board (skip local player - handled by match_started)
     const localUserId = useAuthStore.getState().user?.id;
     if (board.whitePlayerId && board.whitePlayerId !== localUserId) {
       scene.seatRemotePlayerById(board.whitePlayerId, 'bottom', board.id);

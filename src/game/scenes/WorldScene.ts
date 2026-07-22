@@ -111,7 +111,6 @@ export class WorldScene extends Phaser.Scene {
   private mapCollisionBodies: MatterJS.BodyType[] = [];
   private currentTilemap: Phaser.Tilemaps.Tilemap | null = null;
   public onMapSwitch?: (mapKey: string) => void;
-  public onMapChanged?: (mapKey: string) => void;
 
   public onBoardClick?: (arenaId: string, arenaTitle: string) => void;
   public onHouseClick?: (houseId: string) => void;
@@ -1172,6 +1171,13 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  public destroyAllRemotePlayers() {
+    for (const remote of this.otherPlayers.values()) {
+      remote.container.destroy();
+    }
+    this.otherPlayers.clear();
+  }
+
   public updateRemotePlayerState(sessionId: string, state: { x: number; y: number; targetX: number; targetY: number; direction: string; isMoving: boolean }) {
     const remote = this.otherPlayers.get(sessionId);
     if (!remote) return;
@@ -1841,13 +1847,10 @@ export class WorldScene extends Phaser.Scene {
       mapKey = mapPath.replace(/^\/assets\/world-v2\//, '').replace('.tmj', '');
     }
 
-    // Hide all remote players during transition (they'll be re-evaluated after switch)
+    // Hide all remote players during transition
     for (const remote of this.otherPlayers.values()) {
       remote.container.setVisible(false);
     }
-
-    // Notify server about map change
-    this.onMapChanged?.(mapKey);
 
     // Load the TMJ if not already cached
     if (!this.cache.tilemap.has(mapKey)) {
