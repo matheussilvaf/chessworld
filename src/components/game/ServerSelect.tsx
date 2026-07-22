@@ -29,7 +29,7 @@ export function ServerSelect() {
           <div className="inline-flex items-center justify-center w-14 h-14 bg-amber-500/20 rounded-xl mb-4 border border-amber-500/30">
             <Crown className="w-7 h-7 text-amber-400" />
           </div>
-          <h1 className="text-3xl font-bold text-white">Choose Server</h1>
+          <h1 className="text-3xl font-bold text-white">Choose Your Server</h1>
           <p className="text-slate-400 mt-2">Select a region to enter the world</p>
         </div>
 
