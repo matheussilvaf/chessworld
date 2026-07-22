@@ -6,7 +6,7 @@ import { useAuthStore } from '../stores/authStore';
 import { useChessStore } from '../stores/chessStore';
 import { useGameSettingsStore } from '../stores/gameSettingsStore';
 import { useInteractionStore } from '../stores/interactionStore';
-import { getWorldRoom, registerBoards, sendMovement } from '../game/network/colyseusClient';
+import { getWorldRoom, registerBoards, sendMovement, sendChangeMap } from '../game/network/colyseusClient';
 import { useColyseusStore } from '../hooks/useColyseusConnection';
 import { loadCharacterConfigs } from '../config/loadCharacterConfigs';
 import type { WorldScene } from '../game/scenes/WorldScene';
@@ -59,6 +59,13 @@ export function GameCanvas() {
       if (user && region) {
         scene.setLocalPlayer(user.id, region);
       }
+
+      // When the player switches maps, notify the server
+      scene.onMapChanged = (mapKey: string) => {
+        sendChangeMap(mapKey);
+        // Hide all remote players until we re-evaluate their map
+        scene.hideAllRemotePlayers();
+      };
 
       scene.onBoardClick = (arenaId: string, arenaTitle: string) => {
         if (!user || !profile || !region) return;
@@ -304,6 +311,12 @@ export function GameCanvas() {
         return;
       }
 
+      // Only show the player if they're on the same map as us
+      const localMap = scene.getCurrentMapKey();
+      const remoteMap = player.currentMap || 'main_world';
+      const sameMap = (localMap === 'world' && remoteMap === 'main_world') ||
+                      localMap === remoteMap;
+
       scene.handlePlayerJoined({
         id: player.id,
         socketId: sessionId,
@@ -318,15 +331,31 @@ export function GameCanvas() {
         isMoving: player.isMoving,
       });
 
+      // Hide if on different map
+      if (!sameMap) {
+        scene.setRemotePlayerVisibility(sessionId, false);
+      }
+
       player.onChange(() => {
-        scene.updateRemotePlayerState(sessionId, {
-          x: player.x,
-          y: player.y,
-          targetX: player.targetX,
-          targetY: player.targetY,
-          direction: player.direction,
-          isMoving: player.isMoving,
-        });
+        const currentLocalMap = scene.getCurrentMapKey();
+        const currentRemoteMap = player.currentMap || 'main_world';
+        const nowSameMap = (currentLocalMap === 'world' && currentRemoteMap === 'main_world') ||
+                          currentLocalMap === currentRemoteMap;
+
+        // Update visibility based on map
+        scene.setRemotePlayerVisibility(sessionId, nowSameMap);
+
+        // Only update position if on same map
+        if (nowSameMap) {
+          scene.updateRemotePlayerState(sessionId, {
+            x: player.x,
+            y: player.y,
+            targetX: player.targetX,
+            targetY: player.targetY,
+            direction: player.direction,
+            isMoving: player.isMoving,
+          });
+        }
       });
 
       updateOnlineCount(room);

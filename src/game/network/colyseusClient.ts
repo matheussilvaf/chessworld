@@ -139,3 +139,7 @@ export function sendLeaveSeat(boardId: string) {
 export function registerBoards(boards: { id: string; name: string; x: number; y: number; width?: number; height?: number }[]) {
   worldRoom?.send('register_boards', { boards });
 }
+
+export function sendChangeMap(mapKey: string) {
+  worldRoom?.send('change_map', { mapKey });
+}

@@ -39,6 +39,15 @@ export class WorldRoom extends Room<WorldState> {
       player.isMoving = data.isMoving;
     });
 
+    this.onMessage('change_map', (client, data) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+      const { mapKey } = data as { mapKey: string };
+      player.currentMap = mapKey || 'main_world';
+      player.isMoving = false;
+      console.log(`[WorldRoom] Player ${player.username} changed map to: ${player.currentMap}`);
+    });
+
     this.onMessage('register_boards', (client, data) => {
       const { boards } = data as { boards: { id: string; name: string; x: number; y: number; width?: number; height?: number }[] };
       let registered = 0;

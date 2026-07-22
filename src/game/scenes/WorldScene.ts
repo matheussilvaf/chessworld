@@ -111,6 +111,7 @@ export class WorldScene extends Phaser.Scene {
   private mapCollisionBodies: MatterJS.BodyType[] = [];
   private currentTilemap: Phaser.Tilemaps.Tilemap | null = null;
   public onMapSwitch?: (mapKey: string) => void;
+  public onMapChanged?: (mapKey: string) => void;
 
   public onBoardClick?: (arenaId: string, arenaTitle: string) => void;
   public onHouseClick?: (houseId: string) => void;
@@ -551,6 +552,11 @@ export class WorldScene extends Phaser.Scene {
 
   private getHiddenTileLayerIndices(): Set<number> {
     const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
+    if (!tmjData) return new Set();
+    return this.getHiddenTileLayerIndicesForMap(tmjData);
+  }
+
+  private getHiddenTileLayerIndicesForMap(tmjData: any): Set<number> {
     if (!tmjData) return new Set();
 
     const hidden = new Set<number>();
@@ -1127,6 +1133,10 @@ export class WorldScene extends Phaser.Scene {
     return this.arenas;
   }
 
+  public getCurrentMapKey(): string {
+    return this.currentMapKey;
+  }
+
   public handlePlayerJoined(p: { id: string; socketId: string; username: string; rating: number; region: string; x: number; y: number; targetX: number; targetY: number; direction: string; isMoving: boolean }) {
     if (p.id === this.localPlayerId) return;
     const sessionId = p.socketId;
@@ -1139,6 +1149,26 @@ export class WorldScene extends Phaser.Scene {
     if (remote) {
       remote.container.destroy();
       this.otherPlayers.delete(sessionId);
+    }
+  }
+
+  public setRemotePlayerVisibility(sessionId: string, visible: boolean) {
+    const remote = this.otherPlayers.get(sessionId);
+    if (remote) {
+      remote.container.setVisible(visible);
+    }
+  }
+
+  public hideAllRemotePlayers() {
+    for (const remote of this.otherPlayers.values()) {
+      remote.container.setVisible(false);
+    }
+  }
+
+  public showRemotePlayer(sessionId: string) {
+    const remote = this.otherPlayers.get(sessionId);
+    if (remote) {
+      remote.container.setVisible(true);
     }
   }
 
@@ -1811,6 +1841,14 @@ export class WorldScene extends Phaser.Scene {
       mapKey = mapPath.replace(/^\/assets\/world-v2\//, '').replace('.tmj', '');
     }
 
+    // Hide all remote players during transition (they'll be re-evaluated after switch)
+    for (const remote of this.otherPlayers.values()) {
+      remote.container.setVisible(false);
+    }
+
+    // Notify server about map change
+    this.onMapChanged?.(mapKey);
+
     // Load the TMJ if not already cached
     if (!this.cache.tilemap.has(mapKey)) {
       await new Promise<void>((resolve, reject) => {
@@ -1853,15 +1891,22 @@ export class WorldScene extends Phaser.Scene {
       if (tileset) tilesets.push(tileset);
     }
 
-    // Create tile layers (respect order and above-player grouping)
+    // Create tile layers (respect order, above-player grouping, and hidden layers)
     const logicalSet = new Set(MAP_CONFIG.logicalLayers.map(n => n.toLowerCase()));
     const abovePlayerNames = new Set<string>();
     this.collectAbovePlayerLayers(tmjData.layers, false, abovePlayerNames);
 
+    // Compute hidden layer indices for this specific map
+    const hiddenLayerIndices = this.getHiddenTileLayerIndicesForMap(tmjData);
+
     for (let i = 0; i < map.layers.length; i++) {
-      const lowerName = map.layers[i].name.toLowerCase();
+      const layerData = map.layers[i];
+      const lowerName = layerData.name.toLowerCase();
       const shortName = lowerName.split('/').pop() || lowerName;
       if (logicalSet.has(lowerName) || logicalSet.has(shortName)) continue;
+      if (hiddenLayerIndices.has(i)) continue;
+      if (layerData.tilemapLayer) continue;
+
       const layer = map.createLayer(i, tilesets);
       if (layer) {
         const isAbove = abovePlayerNames.has(lowerName) || [...abovePlayerNames].some(n => n.endsWith('/' + lowerName));
@@ -1877,9 +1922,9 @@ export class WorldScene extends Phaser.Scene {
     // Setup collisions
     this.setupCollisionsFromTMJ(mapKey);
 
-    // Build pathfinder
-    const mapWidth = tmjData.width * MAP_CONFIG.tileSize;
-    const mapHeight = tmjData.height * MAP_CONFIG.tileSize;
+    // Build pathfinder using actual TMJ tile dimensions
+    const mapWidth = tmjData.width * (tmjData.tilewidth || MAP_CONFIG.tileSize);
+    const mapHeight = tmjData.height * (tmjData.tileheight || MAP_CONFIG.tileSize);
     this.pathfinder = new AStarGrid(16);
     this.pathfinder.buildGrid(mapWidth, mapHeight, this.collisionRects, this.collisionPolys, 12);
 
@@ -1894,6 +1939,13 @@ export class WorldScene extends Phaser.Scene {
 
     // Position player at target spawn
     this.positionAtSpawn(tmjData, targetSpawnId);
+
+    // Set appropriate background color for the map
+    if (mapKey === MAP_CONFIG.key) {
+      this.cameras.main.setBackgroundColor(0x2d5a27);
+    } else {
+      this.cameras.main.setBackgroundColor(0x1a1a2e);
+    }
 
     // Update camera bounds
     this.cameraBounds = { x: 0, y: 0, w: mapWidth, h: mapHeight };
@@ -1956,9 +2008,5 @@ export class WorldScene extends Phaser.Scene {
     this.cameraTargetY = y;
     const cam = this.cameras.main;
     cam.centerOn(x, y);
-  }
-
-  public getCurrentMapKey(): string {
-    return this.currentMapKey;
   }
 }
