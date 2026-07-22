@@ -1822,7 +1822,11 @@ export class WorldScene extends Phaser.Scene {
     }
 
     // Teardown old map
-    this.teardownCurrentMap();
+    try {
+      this.teardownCurrentMap();
+    } catch (e) {
+      console.warn('[WorldScene] teardown error (non-fatal):', e);
+    }
 
     // Build new map
     this.currentMapKey = mapKey;
@@ -1856,10 +1860,11 @@ export class WorldScene extends Phaser.Scene {
 
     for (let i = 0; i < map.layers.length; i++) {
       const lowerName = map.layers[i].name.toLowerCase();
-      if (logicalSet.has(lowerName)) continue;
+      const shortName = lowerName.split('/').pop() || lowerName;
+      if (logicalSet.has(lowerName) || logicalSet.has(shortName)) continue;
       const layer = map.createLayer(i, tilesets);
       if (layer) {
-        const isAbove = abovePlayerNames.has(lowerName);
+        const isAbove = abovePlayerNames.has(lowerName) || [...abovePlayerNames].some(n => n.endsWith('/' + lowerName));
         layer.setDepth(isAbove ? 200 : 0);
         (layer as any).setCullPadding?.(2, 2);
         this.mapTileLayers.push(layer);
@@ -1877,6 +1882,9 @@ export class WorldScene extends Phaser.Scene {
     const mapHeight = tmjData.height * MAP_CONFIG.tileSize;
     this.pathfinder = new AStarGrid(16);
     this.pathfinder.buildGrid(mapWidth, mapHeight, this.collisionRects, this.collisionPolys, 12);
+
+    // Update Matter world bounds
+    this.matter.world.setBounds(0, 0, mapWidth, mapHeight);
 
     // Setup interactions
     this.setupInteractives(map, mapKey);

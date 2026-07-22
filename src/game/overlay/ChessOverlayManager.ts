@@ -246,6 +246,19 @@ export class ChessOverlayManager {
     }
   }
 
+  destroy() {
+    for (const [, overlay] of this.overlays) {
+      if (overlay.banner) overlay.banner.destroy();
+      for (const p of overlay.pieces) p.destroy();
+      overlay.boardGfx.destroy();
+      overlay.container.destroy();
+    }
+    this.overlays.clear();
+    this.configs.clear();
+    this.pendingFens.clear();
+    this.activeTableId = null;
+  }
+
   private createOverlay(config: TableOverlayConfig): ActiveOverlay {
     const container = this.scene.add.container(config.x, config.y).setDepth(150);
     const boardGfx = this.scene.add.graphics();
