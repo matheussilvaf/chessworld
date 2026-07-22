@@ -64,6 +64,32 @@ export const WORLD_TILESETS: TilesetEntry[] = [
   { tiledName: 'potal-bottom', textureKey: 'wv2-portal-bottom', image: 'sprites/tilesets/portal-bottom.png', firstgid: 19233, isSingleImage: true },
 ];
 
+/** Additional tilesets needed by sub-maps (not in the main world). Loaded on demand. */
+export const EXTRA_TILESETS: TilesetEntry[] = [
+  { tiledName: '!doors', textureKey: 'wv2-doors', image: 'sprites/tilesets/!doors.png', firstgid: 0, isSingleImage: false },
+  { tiledName: '!doors2', textureKey: 'wv2-doors2', image: 'sprites/tilesets/!doors2.png', firstgid: 0, isSingleImage: false },
+  { tiledName: 'Gothic_A2', textureKey: 'wv2-gothic-a2', image: 'sprites/tilesets/Gothic_A2.png', firstgid: 0, isSingleImage: false },
+  { tiledName: 'Gothic_A4', textureKey: 'wv2-gothic-a4', image: 'sprites/tilesets/Gothic_A4.png', firstgid: 0, isSingleImage: false },
+  { tiledName: 'Gothic_B', textureKey: 'wv2-gothic-b', image: 'sprites/tilesets/Gothic_B.png', firstgid: 0, isSingleImage: false },
+  { tiledName: 'Gothic_C', textureKey: 'wv2-gothic-c', image: 'sprites/tilesets/Gothic_C.png', firstgid: 0, isSingleImage: false },
+  { tiledName: 'non-rm-a3', textureKey: 'wv2-non-rm-a3', image: 'sprites/tilesets/non-rm-a3.png', firstgid: 0, isSingleImage: false },
+  { tiledName: 'carpet-and-stuff', textureKey: 'wv2-carpet-and-stuff', image: 'sprites/tilesets/carpet-and-stuff.png', firstgid: 0, isSingleImage: false },
+  { tiledName: 'floors', textureKey: 'wv2-floors', image: 'sprites/tilesets/floors.png', firstgid: 0, isSingleImage: false },
+  { tiledName: 'tournamentinsidedoor', textureKey: 'wv2-tournamentinsidedoor', image: 'sprites/tilesets/tournamentinsidedoor.png', firstgid: 0, isSingleImage: true },
+  { tiledName: 'tournamentdoor2', textureKey: 'wv2-tournamentdoor2', image: 'sprites/tilesets/tournamentinsidedoor2.png', firstgid: 0, isSingleImage: true },
+  { tiledName: 'tournamentopendoor', textureKey: 'wv2-tournamentopendoor', image: 'sprites/tilesets/tournamentopendoor.png', firstgid: 0, isSingleImage: true },
+];
+
+/** All tileset textures (main + extra) for preloading */
+export const ALL_TILESETS: TilesetEntry[] = [...WORLD_TILESETS, ...EXTRA_TILESETS];
+
+/** Lookup texture key by tileset name */
+export function getTextureKeyForTileset(tiledName: string): string | null {
+  const entry = ALL_TILESETS.find(t => t.tiledName === tiledName);
+  return entry?.textureKey ?? null;
+}
+
+/** Resolve a GID to a tileset entry using the main world's firstgid mapping */
 export function findTilesetForGid(rawGid: number): TilesetEntry | null {
   const gid = rawGid & 0x0FFFFFFF;
   let result: TilesetEntry | null = null;
@@ -72,4 +98,21 @@ export function findTilesetForGid(rawGid: number): TilesetEntry | null {
     else break;
   }
   return result;
+}
+
+/**
+ * Resolve a GID to a tileset entry using a custom firstgid mapping (for sub-maps).
+ * Takes the TMJ tileset array and resolves to our texture keys.
+ */
+export function findTilesetForGidInMap(rawGid: number, tmjTilesets: { firstgid: number; name: string }[]): TilesetEntry | null {
+  const gid = rawGid & 0x0FFFFFFF;
+  let matchedTmjTs: { firstgid: number; name: string } | null = null;
+  for (const ts of tmjTilesets) {
+    if (gid >= ts.firstgid) matchedTmjTs = ts;
+    else break;
+  }
+  if (!matchedTmjTs) return null;
+  const entry = ALL_TILESETS.find(t => t.tiledName === matchedTmjTs!.name);
+  if (!entry) return null;
+  return { ...entry, firstgid: matchedTmjTs.firstgid };
 }

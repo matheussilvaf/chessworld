@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import decomp from 'poly-decomp';
 import { MAP_CONFIG } from '../config/mapConfig';
-import { WORLD_TILESETS, findTilesetForGid } from '../config/worldAssets';
+import { WORLD_TILESETS, ALL_TILESETS, EXTRA_TILESETS, findTilesetForGid, findTilesetForGidInMap, getTextureKeyForTileset } from '../config/worldAssets';
 import {
   getCharacter,
   getIdleFrame,
@@ -104,6 +104,14 @@ export class WorldScene extends Phaser.Scene {
   private cameraBounds = { x: 0, y: 0, w: 0, h: 0 };
   private cameraFollowing = true;
 
+  // Map switching state
+  private currentMapKey: string = MAP_CONFIG.key;
+  private mapTileLayers: Phaser.Tilemaps.TilemapLayer[] = [];
+  private mapTileObjectSprites: Phaser.GameObjects.Sprite[] = [];
+  private mapCollisionBodies: MatterJS.BodyType[] = [];
+  private currentTilemap: Phaser.Tilemaps.Tilemap | null = null;
+  public onMapSwitch?: (mapKey: string) => void;
+
   public onBoardClick?: (arenaId: string, arenaTitle: string) => void;
   public onHouseClick?: (houseId: string) => void;
   public onPositionUpdate?: (x: number, y: number) => void;
@@ -138,13 +146,14 @@ export class WorldScene extends Phaser.Scene {
     this.load.image('sitting-north', '/assets/characters/action/sitting/north.png');
     this.load.image('sitting-south', '/assets/characters/action/sitting/south.png');
 
-    for (const ts of WORLD_TILESETS) {
+    for (const ts of ALL_TILESETS) {
       this.load.image(ts.textureKey, MAP_CONFIG.basePath + ts.image);
     }
   }
 
   create() {
     const map = this.make.tilemap({ key: MAP_CONFIG.key });
+    this.currentTilemap = map;
 
     // Add regular tilesets (spritesheet-based, with top-level image in TMJ)
     const tilesets: Phaser.Tilemaps.Tileset[] = [];
@@ -194,6 +203,7 @@ export class WorldScene extends Phaser.Scene {
         const isAbove = abovePlayerNames.has(lowerName);
         layer.setDepth(isAbove ? 200 : 0);
         (layer as any).setCullPadding?.(2, 2);
+        this.mapTileLayers.push(layer);
       }
     }
 
@@ -472,9 +482,12 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
-  private renderTileObjects(_map: Phaser.Tilemaps.Tilemap, logicalSet: Set<string>) {
-    const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
+  private renderTileObjects(_map: Phaser.Tilemaps.Tilemap, logicalSet: Set<string>, mapKey?: string) {
+    const key = mapKey || MAP_CONFIG.key;
+    const tmjData = this.cache.tilemap.get(key)?.data;
     if (!tmjData) return;
+
+    const tmjTilesets = tmjData.tilesets || [];
 
     const processLayers = (layers: any[], isAbove: boolean) => {
       for (const layerData of layers) {
@@ -495,19 +508,22 @@ export class WorldScene extends Phaser.Scene {
           if (!obj.gid || obj.visible === false) continue;
 
           const rawGid = obj.gid;
-          const tsDef = findTilesetForGid(rawGid);
+          const tsDef = mapKey
+            ? findTilesetForGidInMap(rawGid, tmjTilesets)
+            : findTilesetForGid(rawGid);
           if (!tsDef || !tsDef.isSingleImage) continue;
 
           const sprite = this.add.sprite(obj.x, obj.y, tsDef.textureKey);
-          sprite.setOrigin(0, 1); // Tiled tile objects have origin at bottom-left
+          sprite.setOrigin(0, 1);
           sprite.setDisplaySize(obj.width || 32, obj.height || 32);
           sprite.setDepth(layerAbove ? 200 : 0);
 
-          // Handle flip flags encoded in GID
           const FLIPPED_H = 0x80000000;
           const FLIPPED_V = 0x40000000;
           if (rawGid & FLIPPED_H) sprite.setFlipX(true);
           if (rawGid & FLIPPED_V) sprite.setFlipY(true);
+
+          this.mapTileObjectSprites.push(sprite);
         }
       }
     };
@@ -596,8 +612,9 @@ export class WorldScene extends Phaser.Scene {
     return null;
   }
 
-  private setupCollisionsFromTMJ() {
-    const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
+  private setupCollisionsFromTMJ(mapKey?: string) {
+    const key = mapKey || MAP_CONFIG.key;
+    const tmjData = this.cache.tilemap.get(key)?.data;
     if (!tmjData) return;
 
     const collisionObjects = this.findObjectLayerInTMJ(tmjData.layers, 'collisions');
@@ -623,10 +640,11 @@ export class WorldScene extends Phaser.Scene {
         this.collisionRects.push({ x: obj.x, y: obj.y, width: obj.width, height: obj.height });
         const cx = obj.x + obj.width / 2;
         const cy = obj.y + obj.height / 2;
-        this.matter.add.rectangle(cx, cy, obj.width, obj.height, {
+        const body = this.matter.add.rectangle(cx, cy, obj.width, obj.height, {
           isStatic: true,
           label,
         });
+        if (body) this.mapCollisionBodies.push(body);
       }
     }
   }
@@ -713,6 +731,7 @@ export class WorldScene extends Phaser.Scene {
     });
 
     if (body) {
+      this.mapCollisionBodies.push(body);
       // Matter.fromVertices shifts the body to its computed center of mass.
       // Correct: compare the body's actual bounding box to the intended one.
       const bodyBounds = body.bounds;
@@ -824,8 +843,9 @@ export class WorldScene extends Phaser.Scene {
     this.emitMovement(false);
   }
 
-  private setupInteractives(_map: Phaser.Tilemaps.Tilemap) {
-    const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
+  private setupInteractives(_map: Phaser.Tilemaps.Tilemap, mapKey?: string) {
+    const key = mapKey || MAP_CONFIG.key;
+    const tmjData = this.cache.tilemap.get(key)?.data;
     if (!tmjData) return;
 
     this.interactionSystem = new InteractionSystem(
@@ -1499,8 +1519,9 @@ export class WorldScene extends Phaser.Scene {
     return this.interactionSystem?.getStats() || {};
   }
 
-  public loadTableAnchorsFromTMJ() {
-    const tmjData = this.cache.tilemap.get(MAP_CONFIG.key)?.data;
+  public loadTableAnchorsFromTMJ(mapKey?: string) {
+    const key = mapKey || MAP_CONFIG.key;
+    const tmjData = this.cache.tilemap.get(key)?.data;
     if (!tmjData) return;
 
     this.tableRegistry = loadTableRegistry(tmjData);
@@ -1720,5 +1741,216 @@ export class WorldScene extends Phaser.Scene {
 
   public isSeated(): boolean {
     return this.currentSeatInfo !== null;
+  }
+
+  // =========================================================
+  // Map Switching
+  // =========================================================
+
+  private teardownCurrentMap() {
+    // Destroy tile layers
+    for (const layer of this.mapTileLayers) {
+      layer.destroy();
+    }
+    this.mapTileLayers = [];
+
+    // Destroy tile object sprites
+    for (const sprite of this.mapTileObjectSprites) {
+      sprite.destroy();
+    }
+    this.mapTileObjectSprites = [];
+
+    // Remove collision bodies from Matter world
+    for (const body of this.mapCollisionBodies) {
+      this.matter.world.remove(body);
+    }
+    this.mapCollisionBodies = [];
+    this.collisionRects = [];
+    this.collisionPolys = [];
+
+    // Destroy interaction system
+    if (this.interactionSystem) {
+      this.interactionSystem.destroy();
+      this.interactionSystem = null as any;
+    }
+
+    // Clear arenas
+    this.arenas = [];
+
+    // Clear chess overlay
+    if (this.chessOverlay) {
+      this.chessOverlay.destroy();
+      this.chessOverlay = null as any;
+    }
+
+    // Clear table registry
+    this.tableRegistry = null as any;
+
+    // Destroy tilemap
+    if (this.currentTilemap) {
+      this.currentTilemap.destroy();
+      this.currentTilemap = null;
+    }
+  }
+
+  public async switchMap(mapPath: string, targetSpawnId: string) {
+    this.movementLocked = true;
+    this.target = null;
+    this.pathWaypoints = [];
+    this.currentWaypointIndex = 0;
+    this.finalDestination = null;
+    if (this.playerBody) {
+      this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
+    }
+
+    // Determine map key from path
+    let mapKey: string;
+    if (mapPath === MAP_CONFIG.path || mapPath === '/assets/world-v2/main_world.tmj') {
+      mapKey = MAP_CONFIG.key;
+    } else {
+      mapKey = mapPath.replace(/^\/assets\/world-v2\//, '').replace('.tmj', '');
+    }
+
+    // Load the TMJ if not already cached
+    if (!this.cache.tilemap.has(mapKey)) {
+      await new Promise<void>((resolve, reject) => {
+        this.load.tilemapTiledJSON(mapKey, mapPath);
+        this.load.once('complete', () => resolve());
+        this.load.once('loaderror', () => reject(new Error(`Failed to load map: ${mapPath}`)));
+        this.load.start();
+      });
+    }
+
+    // Teardown old map
+    this.teardownCurrentMap();
+
+    // Build new map
+    this.currentMapKey = mapKey;
+    const tmjData = this.cache.tilemap.get(mapKey)?.data;
+    if (!tmjData) {
+      console.error('[WorldScene] switchMap: no TMJ data for', mapKey);
+      this.movementLocked = false;
+      return;
+    }
+
+    // Create Phaser tilemap
+    const map = this.make.tilemap({ key: mapKey });
+    this.currentTilemap = map;
+
+    // Add tilesets (match TMJ tileset names to our texture keys)
+    const tilesets: Phaser.Tilemaps.Tileset[] = [];
+    for (const ts of tmjData.tilesets) {
+      const textureKey = getTextureKeyForTileset(ts.name);
+      if (!textureKey) {
+        console.warn('[WorldScene] switchMap: unknown tileset', ts.name);
+        continue;
+      }
+      const tileset = map.addTilesetImage(ts.name, textureKey);
+      if (tileset) tilesets.push(tileset);
+    }
+
+    // Create tile layers (respect order and above-player grouping)
+    const logicalSet = new Set(MAP_CONFIG.logicalLayers.map(n => n.toLowerCase()));
+    const abovePlayerNames = new Set<string>();
+    this.collectAbovePlayerLayers(tmjData.layers, false, abovePlayerNames);
+
+    for (let i = 0; i < map.layers.length; i++) {
+      const lowerName = map.layers[i].name.toLowerCase();
+      if (logicalSet.has(lowerName)) continue;
+      const layer = map.createLayer(i, tilesets);
+      if (layer) {
+        const isAbove = abovePlayerNames.has(lowerName);
+        layer.setDepth(isAbove ? 200 : 0);
+        (layer as any).setCullPadding?.(2, 2);
+        this.mapTileLayers.push(layer);
+      }
+    }
+
+    // Render tile objects (single-image sprites)
+    this.renderTileObjects(map, logicalSet, mapKey);
+
+    // Setup collisions
+    this.setupCollisionsFromTMJ(mapKey);
+
+    // Build pathfinder
+    const mapWidth = tmjData.width * MAP_CONFIG.tileSize;
+    const mapHeight = tmjData.height * MAP_CONFIG.tileSize;
+    this.pathfinder = new AStarGrid(16);
+    this.pathfinder.buildGrid(mapWidth, mapHeight, this.collisionRects, this.collisionPolys, 12);
+
+    // Setup interactions
+    this.setupInteractives(map, mapKey);
+
+    // Load table anchors from new map
+    this.loadTableAnchorsFromTMJ(mapKey);
+
+    // Position player at target spawn
+    this.positionAtSpawn(tmjData, targetSpawnId);
+
+    // Update camera bounds
+    this.cameraBounds = { x: 0, y: 0, w: mapWidth, h: mapHeight };
+
+    // Register new arenas with Colyseus
+    this.onMapSwitch?.(mapKey);
+
+    // Unlock movement
+    this.movementLocked = false;
+
+    console.log('[WorldScene] switchMap complete:', mapKey, 'spawn:', targetSpawnId);
+  }
+
+  private positionAtSpawn(tmjData: any, spawnId: string) {
+    const spawns = this.findTMJObjectLayer(tmjData.layers, 'spawns');
+    if (!spawns) {
+      console.warn('[WorldScene] positionAtSpawn: no spawns layer');
+      return;
+    }
+
+    let spawnObj: any = null;
+    for (const obj of spawns) {
+      const props: any[] = obj.properties || [];
+      const sid = props.find((p: any) => p.name === 'spawnId')?.value;
+      if (sid === spawnId) {
+        spawnObj = obj;
+        break;
+      }
+    }
+
+    if (!spawnObj) {
+      console.warn('[WorldScene] positionAtSpawn: spawn not found:', spawnId);
+      return;
+    }
+
+    const props: any[] = spawnObj.properties || [];
+    const direction = props.find((p: any) => p.name === 'direction')?.value || 'down';
+
+    const x = spawnObj.x;
+    const y = spawnObj.y;
+
+    // Move body to spawn position
+    this.matter.body.setPosition(this.playerBody, { x: x + this.playerFeetOffsetX, y: y + this.playerFeetOffset });
+    this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
+
+    // Snap sprite
+    if (this.player) {
+      this.player.setPosition(x, y);
+    }
+
+    // Apply direction
+    this.currentDirection = direction as any;
+    if (this.player) {
+      this.player.anims.stop();
+      this.player.setFrame(getIdleFrame(this.currentDirection));
+    }
+
+    // Snap camera
+    this.cameraTargetX = x;
+    this.cameraTargetY = y;
+    const cam = this.cameras.main;
+    cam.centerOn(x, y);
+  }
+
+  public getCurrentMapKey(): string {
+    return this.currentMapKey;
   }
 }

@@ -134,7 +134,36 @@ export function GameCanvas() {
           return;
         }
 
-        // For all other interaction categories, show debug modal if enabled
+        // For all other interaction categories, handle enter_building action
+        if (obj.properties.action === 'enter_building' && obj.properties.targetMap) {
+          const targetMap = obj.properties.targetMap as string;
+          const targetSpawn = obj.properties.targetSpawn as string;
+          let mapPath = '';
+          if (targetMap === 'tournament_arena_interior') {
+            mapPath = '/assets/world-v2/tournament_reception.tmj';
+          }
+          if (mapPath && targetSpawn) {
+            scene.switchMap(mapPath, targetSpawn);
+            useInteractionStore.getState().setProximityObject(null);
+            return;
+          }
+        }
+
+        if (obj.properties.action === 'exit_building' && obj.properties.targetMap) {
+          const targetMap = obj.properties.targetMap as string;
+          const targetSpawn = obj.properties.targetSpawn as string;
+          let mapPath = '';
+          if (targetMap === 'main_world') {
+            mapPath = '/assets/world-v2/main_world.tmj';
+          }
+          if (mapPath && targetSpawn) {
+            scene.switchMap(mapPath, targetSpawn);
+            useInteractionStore.getState().setProximityObject(null);
+            return;
+          }
+        }
+
+        // Fallback: show debug modal if enabled
         if (interactionStore.debugEnabled) {
           interactionStore.openModal({ object: obj, playerDistance: event.playerDistance });
         }
