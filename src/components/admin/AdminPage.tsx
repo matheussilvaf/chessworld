@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useInteractionStore } from '../../stores/interactionStore';
+import { getColyseusHttpUrl } from '../../config/colyseus';
 import { Settings, Gauge, ZoomIn, ArrowLeft, Crosshair, Bug, Waypoints } from 'lucide-react';
+import { TournamentConfigSection } from './TournamentConfigSection';
 
 interface GameSettings {
   default_zoom: number;
@@ -274,6 +276,11 @@ export function AdminPage() {
               </button>
             </div>
           </div>
+        </div>
+
+        {/* Tournament Configuration */}
+        <div className="space-y-6">
+          <TournamentConfigSection serverUrl={getColyseusHttpUrl()} />
         </div>
 
         {/* Footer info */}

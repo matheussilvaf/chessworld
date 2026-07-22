@@ -7,6 +7,8 @@ import express from "express";
 import cors from "cors";
 import { AccessToken } from "livekit-server-sdk";
 import { tournamentRouter } from "./tournament/routes.js";
+import { coordinatorRouter } from "./tournament/coordinatorRoutes.js";
+import { startCoordinator } from "./tournament/coordinator.js";
 
 const config: ConfigOptions = {
   initializeGameServer: (gameServer) => {
@@ -83,8 +85,13 @@ const config: ConfigOptions = {
     });
 
     app.use("/api/tournament", tournamentRouter);
+    app.use("/api/coordinator", coordinatorRouter);
 
     app.use("/colyseus", monitor());
+
+    startCoordinator().catch(err => {
+      console.error('[AppConfig] Failed to start coordinator:', err.message);
+    });
   },
 };
 

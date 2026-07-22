@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import { tournamentApi } from './api';
-import { useTournamentRoom } from '../../hooks/useTournamentRoom';
 import { getColyseusHttpUrl, isColyseusConfigured } from '../../config/colyseus';
 import { ConfigSection } from './sections/ConfigSection';
 import { PlayersSection } from './sections/PlayersSection';
@@ -54,6 +53,7 @@ function DiagBox({ label, value, ok }: { label: string; value: any; ok?: boolean
 export function SwissTestPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tournaments, setTournaments] = useState<any[]>([]);
+  const [tournament, setTournament] = useState<any>(null);
   const [presets, setPresets] = useState<any[]>([]);
   const [diagnostics, setDiagnostics] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +63,7 @@ export function SwissTestPage() {
   const [engineDiag, setEngineDiag] = useState<any>(null);
   const [diagLoading, setDiagLoading] = useState(false);
 
-  const { tournament, connected, requestRefresh } = useTournamentRoom(selectedId);
+  const connected = true;
 
   useEffect(() => {
     document.documentElement.style.overflow = 'auto';
@@ -122,16 +122,15 @@ export function SwissTestPage() {
   }, []);
 
   const refresh = useCallback(async () => {
-    requestRefresh();
     if (selectedId) {
       try {
         const t = await tournamentApi.getTournament(selectedId);
-        // Room will update via state sync, but force update for immediate feedback
+        setTournament(t);
       } catch (e: any) {
         setError(e.message);
       }
     }
-  }, [selectedId, requestRefresh]);
+  }, [selectedId]);
 
   const createNew = async () => {
     try {
@@ -198,7 +197,7 @@ export function SwissTestPage() {
         // Room will auto-sync, but also update tournaments list
       }
       if (result?.diagnostics) setDiagnostics(result.diagnostics);
-      requestRefresh();
+      refresh();
       await loadTournaments();
     } catch (e: any) {
       setError(e.message);
