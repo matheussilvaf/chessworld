@@ -51,6 +51,11 @@ export function GameCanvas() {
       sceneReadyRef.current = true;
       console.log('[GameCanvas] Scene ready');
 
+      // Wire confirm action for ProximityButton clicks
+      useInteractionStore.getState().setConfirmAction(() => {
+        scene.confirmProximityInteraction();
+      });
+
       if (user && region) {
         scene.setLocalPlayer(user.id, region);
       }

@@ -18,7 +18,7 @@ const CATEGORY_ACTIONS: Record<string, string> = {
 };
 
 export function ProximityButton() {
-  const { proximityObject, debugEnabled, openModal } = useInteractionStore();
+  const { proximityObject, debugEnabled, confirmAction } = useInteractionStore();
 
   if (!proximityObject || !debugEnabled) return null;
 
@@ -32,7 +32,9 @@ export function ProximityButton() {
     proximityObject.name;
 
   const handleClick = () => {
-    openModal({ object: proximityObject, playerDistance: 0 });
+    if (confirmAction) {
+      confirmAction();
+    }
   };
 
   return (
