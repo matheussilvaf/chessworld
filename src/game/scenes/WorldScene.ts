@@ -304,12 +304,16 @@ export class WorldScene extends Phaser.Scene {
     const { w, h } = this.cameraBounds;
     const halfViewW = halfW / ppu;
     const halfViewH = halfH / ppu;
-    const minMidX = halfViewW;
-    const maxMidX = Math.max(halfViewW, w - halfViewW);
-    const minMidY = halfViewH;
-    const maxMidY = Math.max(halfViewH, h - halfViewH);
-    midX = Phaser.Math.Clamp(midX, minMidX, maxMidX);
-    midY = Phaser.Math.Clamp(midY, minMidY, maxMidY);
+    if (w <= halfViewW * 2) {
+      midX = w / 2;
+    } else {
+      midX = Phaser.Math.Clamp(midX, halfViewW, w - halfViewW);
+    }
+    if (h <= halfViewH * 2) {
+      midY = h / 2;
+    } else {
+      midY = Phaser.Math.Clamp(midY, halfViewH, h - halfViewH);
+    }
 
     // Re-snap after clamping to maintain texel alignment
     midX = Math.floor(midX * ppu) / ppu;
