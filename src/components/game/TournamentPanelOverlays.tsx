@@ -135,22 +135,25 @@ export function TournamentPanelOverlays() {
     }
 
     const modulesKey = JSON.stringify(state.modules);
-    if (modulesKey !== prevModules.current && state.modules.length > 0) {
+    const canLoadArena = state.status === 'starting' || state.status === 'round_active' || state.status === 'between_rounds';
+    const shouldDismount = state.status === 'finalizing' || state.status === 'completed'
+      || state.status === 'registration_open' || state.status === 'idle'
+      || state.status === 'cancelled_insufficient_players';
+
+    if (shouldDismount) {
+      if (prevModules.current !== '[]' && prevModules.current !== '') {
+        prevModules.current = '[]';
+        if (typeof scene.removeArenaModules === 'function') {
+          scene.removeArenaModules();
+        }
+      }
+    } else if (canLoadArena && modulesKey !== prevModules.current && state.modules.length > 0) {
       prevModules.current = modulesKey;
       if (typeof scene.loadArenaModules === 'function') {
         try {
           scene.loadArenaModules(state.modules, state.tables);
         } catch (err) {
           console.error('[TournamentPanelOverlays] loadArenaModules error:', err);
-        }
-      }
-    }
-
-    if (state.status === 'idle' || state.status === 'registration_open') {
-      if (prevModules.current !== '[]' && prevModules.current !== '') {
-        prevModules.current = '[]';
-        if (typeof scene.removeArenaModules === 'function') {
-          scene.removeArenaModules();
         }
       }
     }
