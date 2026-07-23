@@ -327,6 +327,82 @@ export class WorldRoom extends Room<WorldState> {
       const vp = this.state.voiceParticipants.get(client.sessionId);
       if (vp) vp.muted = muted;
     });
+
+    // Tournament match: when a player receives a pairing, they send this to join their assigned board
+    this.onMessage('tournament_seat', (client, data) => {
+      const { boardId, baseTimeSeconds, incrementSeconds, timeCategory, timeLabel, opponentId, color } = data as {
+        boardId: string;
+        baseTimeSeconds: number;
+        incrementSeconds: number;
+        timeCategory: string;
+        timeLabel: string;
+        opponentId: string;
+        color: 'w' | 'b';
+      };
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+
+      // Register board if not exists
+      if (!this.state.boards.has(boardId)) {
+        const board = new BoardState();
+        board.id = boardId;
+        board.name = `Tournament Board ${boardId}`;
+        board.x = 0;
+        board.y = 0;
+        board.width = 80;
+        board.height = 80;
+        board.status = 'idle';
+        this.state.boards.set(boardId, board);
+      }
+
+      const board = this.state.boards.get(boardId)!;
+
+      // If board is already playing a match, just confirm to player
+      if (board.status === 'playing' && board.matchId) {
+        const match = this.state.matches.get(board.matchId);
+        if (match && (match.whitePlayerId === player.id || match.blackPlayerId === player.id)) {
+          const myColor = match.whitePlayerId === player.id ? 'w' : 'b';
+          client.send('match_started', { matchId: board.matchId, boardId, color: myColor });
+          return;
+        }
+      }
+
+      // First player: set up as waiting
+      if (board.status === 'idle') {
+        board.status = 'waiting';
+        board.waitingPlayerId = player.id;
+        board.waitingPlayerName = player.username;
+        board.timeCategory = timeCategory;
+        board.baseMinutes = baseTimeSeconds / 60;
+        board.incrementSeconds = incrementSeconds;
+        board.timeLabel = timeLabel;
+        if (color === 'w') {
+          board.whitePlayerId = player.id;
+          board.blackPlayerId = '';
+        } else {
+          board.blackPlayerId = player.id;
+          board.whitePlayerId = '';
+        }
+        player.currentBoardId = boardId;
+
+        const seat = color === 'w' ? 'bottom' : 'top';
+        client.send('tournament_seated', { boardId, color, seat });
+        return;
+      }
+
+      // Second player: start the match
+      if (board.status === 'waiting' && board.waitingPlayerId !== player.id) {
+        player.currentBoardId = boardId;
+        this.startMatch(board, player, client);
+        return;
+      }
+
+      // Already waiting as the same player
+      if (board.status === 'waiting' && board.waitingPlayerId === player.id) {
+        const seat = color === 'w' ? 'bottom' : 'top';
+        client.send('tournament_seated', { boardId, color, seat });
+      }
+    });
   }
 
   onJoin(client: Client, options: JoinOptions) {

@@ -1909,7 +1909,7 @@ export class WorldScene extends Phaser.Scene {
   private doorOpen = false;
   private doorObjects: { closed: Phaser.GameObjects.GameObject | null; open: Phaser.GameObjects.GameObject | null; blocker: MatterJS.BodyType | null } = { closed: null, open: null, blocker: null };
 
-  public async loadArenaModules(modules: Array<{ instanceId: string; moduleType: string; order: number }>) {
+  public async loadArenaModules(modules: Array<{ instanceId: string; moduleType: string; order: number }>, tables?: Array<{ runtimeTableId: string; tableNumber: number; moduleInstanceId: string; localSlotId: string }>) {
     if (this.arenaLoaded || modules.length === 0) return;
     console.log('[WorldScene] Loading arena modules:', modules.length);
 
@@ -1966,6 +1966,10 @@ export class WorldScene extends Phaser.Scene {
 
       // Add collisions at offset
       this.addModuleCollisions(modTmjData, offsetX, offsetY, mod.instanceId);
+
+      // Register module table anchors in the table registry with offset
+      const moduleTables = (tables || []).filter(t => t.moduleInstanceId === mod.instanceId);
+      this.registerModuleTableAnchors(modTmjData, offsetX, offsetY, mod.instanceId, moduleTables);
 
       // Find north connector for next module
       if (connectors.north) {
@@ -2190,6 +2194,64 @@ export class WorldScene extends Phaser.Scene {
       case 'single': return { south: 'single_module_south_connector', north: 'single_module_north_connector' };
       case 'end': return { south: 'end_module_south_connector' };
       default: return { south: '' };
+    }
+  }
+
+  private registerModuleTableAnchors(tmjData: any, offsetX: number, offsetY: number, moduleInstanceId: string, tableMappings: Array<{ runtimeTableId: string; localSlotId: string }>) {
+    if (!this.tableRegistry) return;
+    const charAnchorsLayer = this.findObjectLayerInTMJ(tmjData.layers, 'character_anchors');
+    if (!charAnchorsLayer) return;
+
+    const getProps = (obj: any): Record<string, string | number | boolean> => {
+      const result: Record<string, string | number | boolean> = {};
+      for (const p of obj.properties || []) {
+        result[p.name] = p.value;
+      }
+      return result;
+    };
+
+    // Group by tableId (slot name)
+    const byTable = new Map<string, any[]>();
+    for (const obj of charAnchorsLayer) {
+      const props = getProps(obj);
+      const tableId = props.tableId as string;
+      if (!tableId) continue;
+      if (!byTable.has(tableId)) byTable.set(tableId, []);
+      byTable.get(tableId)!.push({ ...obj, props, x: obj.x + offsetX, y: obj.y + offsetY });
+    }
+
+    for (const [slotId, anchors] of byTable) {
+      // Find the runtimeTableId from the server's mapping
+      const mapping = tableMappings.find(t => t.localSlotId === slotId);
+      const runtimeId = mapping ? mapping.runtimeTableId : `${moduleInstanceId}_${slotId}`;
+
+      const find = (anchorType: string, role: string, position?: string, side?: string, seatIndex?: string) => {
+        const match = anchors.find((a: any) =>
+          a.props.anchorType === anchorType &&
+          a.props.role === role &&
+          (position === undefined || a.props.position === position) &&
+          (side === undefined || a.props.side === side) &&
+          (seatIndex === undefined || a.props.seatIndex === seatIndex)
+        );
+        if (match) return { x: match.x, y: match.y, direction: (match.props.direction as string) || 'down' };
+        return { x: 0, y: 0, direction: 'down' };
+      };
+
+      this.tableRegistry.tables.set(runtimeId, {
+        tableId: runtimeId,
+        playerTop: find('chess_seat', 'player', 'top'),
+        playerBottom: find('chess_seat', 'player', 'bottom'),
+        spectatorLeft01: find('chess_seat', 'spectator', undefined, 'left', '1'),
+        spectatorLeft02: find('chess_seat', 'spectator', undefined, 'left', '2'),
+        spectatorRight01: find('chess_seat', 'spectator', undefined, 'right', '1'),
+        spectatorRight02: find('chess_seat', 'spectator', undefined, 'right', '2'),
+        exitTop: find('chess_seat_exit', 'player', undefined, 'top'),
+        exitBottom: find('chess_seat_exit', 'player', undefined, 'bottom'),
+        exitLeft: find('chess_seat_exit', 'spectator', undefined, 'left'),
+        exitRight: find('chess_seat_exit', 'spectator', undefined, 'right'),
+        cameraFocus: null,
+        overlayArea: null,
+      });
     }
   }
 

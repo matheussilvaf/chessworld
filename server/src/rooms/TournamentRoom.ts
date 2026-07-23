@@ -1,6 +1,7 @@
 import { Room, Client } from '@colyseus/core';
 import { Schema, defineTypes, MapSchema, ArraySchema, type } from '@colyseus/schema';
 import * as coordinator from '../tournament/coordinator.js';
+import { setTournamentRoomInstance } from '../tournament/coordinator.js';
 import { createClient } from '@supabase/supabase-js';
 
 // --- Schema definitions for state sync ---
@@ -152,6 +153,7 @@ export class TournamentRoom extends Room<TournamentArenaState> {
     this.setState(new TournamentArenaState());
     this.autoDispose = false;
     this.maxClients = 50;
+    setTournamentRoomInstance(this);
 
     this.onMessage('refresh', async () => {
       await this.syncState();
@@ -228,6 +230,7 @@ export class TournamentRoom extends Room<TournamentArenaState> {
     if (this.refreshInterval) {
       clearInterval(this.refreshInterval);
     }
+    setTournamentRoomInstance(null);
   }
 
   isPlayerPresent(playerId: string): boolean {

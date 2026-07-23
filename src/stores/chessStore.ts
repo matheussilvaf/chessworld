@@ -285,6 +285,14 @@ export const useChessStore = create<ChessState>((set, get) => ({
       if (dbMatchId && playerColor === 'w') {
         updateDbMatchStatus(dbMatchId, 'finished', matchData.result || 'draw', matchData.winnerId || null, matchData.fen);
       }
+      // Emit tournament result event for reporting to coordinator
+      window.dispatchEvent(new CustomEvent('tournament_match_ended', {
+        detail: {
+          boardId: matchData.boardId,
+          result: matchData.result,
+          winnerId: matchData.winnerId,
+        }
+      }));
     }
 
     // Determine last move BEFORE loading the new FEN

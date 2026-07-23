@@ -3,6 +3,15 @@ import * as service from './service.js';
 import type { Tournament, GameResult, RoundMode, Color } from './types.js';
 import { getEngineStatus } from './engine.js';
 
+// Reference to TournamentRoom for presence checks
+let tournamentRoomInstance: { isPlayerPresent(playerId: string): boolean } | null = null;
+export function setTournamentRoomInstance(room: { isPlayerPresent(playerId: string): boolean } | null) {
+  tournamentRoomInstance = room;
+}
+function getTournamentRoomInstance() {
+  return tournamentRoomInstance;
+}
+
 export interface TournamentConfig {
   intervalSeconds: number;
   timeControl: {
@@ -916,10 +925,13 @@ export async function reportMatchResult(
   return !!data;
 }
 
-async function isPlayerPresent(_playerId: string): Promise<boolean> {
-  // Presence is tracked by the TournamentRoom via Colyseus clients
-  // This returns true by default - the Room will update presence in real-time
-  return false;
+async function isPlayerPresent(playerId: string): Promise<boolean> {
+  // Check if TournamentRoom has this player connected
+  const room = getTournamentRoomInstance();
+  if (room) {
+    return room.isPlayerPresent(playerId);
+  }
+  return true;
 }
 
 function mapInstance(row: any): TournamentInstance {
