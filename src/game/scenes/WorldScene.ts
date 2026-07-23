@@ -103,6 +103,7 @@ export class WorldScene extends Phaser.Scene {
   private cameraTargetX = 0;
   private cameraTargetY = 0;
   private cameraBounds = { x: 0, y: 0, w: 0, h: 0 };
+  private arenaFullBounds: { x: number; y: number; w: number; h: number } | null = null;
   private cameraFollowing = true;
 
   // Map switching state
@@ -535,6 +536,10 @@ export class WorldScene extends Phaser.Scene {
           const FLIPPED_V = 0x40000000;
           if (rawGid & FLIPPED_H) sprite.setFlipX(true);
           if (rawGid & FLIPPED_V) sprite.setFlipY(true);
+
+          if (obj.name) {
+            (sprite as any).__objName = obj.name;
+          }
 
           this.mapTileObjectSprites.push(sprite);
         }
@@ -1582,6 +1587,9 @@ export class WorldScene extends Phaser.Scene {
     this.movementLocked = false;
     this.targetZoom = this.defaultZoom;
     this.cameraFollowing = true;
+    // Restore camera bounds to reception area
+    const b = this.cameraBounds;
+    this.cameras.main.setBounds(b.x, b.y, b.w, b.h);
   }
 
   public setDefaultZoom(zoom: number) {
@@ -1732,6 +1740,12 @@ export class WorldScene extends Phaser.Scene {
         this.emitMovement(false, this.currentDirection);
       },
     });
+
+    // Expand camera bounds to include arena area if seating at negative Y
+    if (anchor.y < 0 && this.arenaFullBounds) {
+      const b = this.arenaFullBounds;
+      this.cameras.main.setBounds(b.x, b.y, b.w, b.h);
+    }
 
     // Focus camera on table using camera focus area
     const cam = anchors.cameraFocus;
@@ -1984,7 +1998,7 @@ export class WorldScene extends Phaser.Scene {
 
     const bounds = this.arenaManager.loadModules(modules, tables || [], this.currentMapKey);
 
-    // Expand world and camera bounds to include modules
+    // Expand physics bounds to include modules, but keep camera bounds at reception level
     const currentTmj = this.cache.tilemap.get(this.currentMapKey)?.data;
     const recWidth = currentTmj ? currentTmj.width * (currentTmj.tilewidth || 32) : 1440;
     const recHeight = currentTmj ? currentTmj.height * (currentTmj.tileheight || 32) : 896;
@@ -1993,8 +2007,11 @@ export class WorldScene extends Phaser.Scene {
 
     if (bounds.minY < 0) {
       this.matter.world.setBounds(0, bounds.minY, totalWidth, totalHeight);
-      this.cameraBounds = { x: 0, y: bounds.minY, w: totalWidth, h: totalHeight };
-      this.cameras.main.setBounds(0, bounds.minY, totalWidth, totalHeight);
+      // Store full bounds for when player is seated in arena
+      this.arenaFullBounds = { x: 0, y: bounds.minY, w: totalWidth, h: totalHeight };
+      // Keep camera bounds at reception level so panels don't shift
+      this.cameraBounds = { x: 0, y: 0, w: recWidth, h: recHeight };
+      this.cameras.main.setBounds(0, 0, recWidth, recHeight);
     }
 
     // Rebuild pathfinder with expanded area including module collisions
@@ -2050,6 +2067,7 @@ export class WorldScene extends Phaser.Scene {
       }
       this.arenaManager.removeAll();
     }
+    this.arenaFullBounds = null;
 
     // Restore bounds to current map and rebuild pathfinder
     const tmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
@@ -2069,6 +2087,13 @@ export class WorldScene extends Phaser.Scene {
       this.arenaManager = new ArenaModuleManager(this);
     }
     this.arenaManager.setDoorOpen(open);
+
+    // Hide/show the north_extension_door_closed visual object
+    for (const sprite of this.mapTileObjectSprites) {
+      if ((sprite as any).__objName === 'north_extension_door_closed') {
+        sprite.setVisible(!open);
+      }
+    }
   }
 
   public initDoorSystem() {

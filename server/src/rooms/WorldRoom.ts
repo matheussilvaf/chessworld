@@ -6,6 +6,7 @@ import { PlayerState } from '../schemas/PlayerState.js';
 import { BoardState } from '../schemas/BoardState.js';
 import { MatchState } from '../schemas/MatchState.js';
 import { VoiceParticipantState } from '../schemas/VoiceParticipantState.js';
+import * as coordinator from '../tournament/coordinator.js';
 
 interface JoinOptions {
   playerId: string;
@@ -548,6 +549,39 @@ export class WorldRoom extends Room<WorldState> {
       result: match.result,
       winnerId: match.winnerId,
     });
+    this.reportTournamentResult(match);
+  }
+
+  private async reportTournamentResult(match: MatchState) {
+    const boardId = match.boardId;
+    if (!boardId || !boardId.includes('_table_')) return;
+
+    try {
+      const instance = await coordinator.getCurrentInstance();
+      if (!instance || instance.status !== 'round_active') return;
+
+      const pairings = await coordinator.getPairings(instance.id, instance.currentRound);
+      const pairing = pairings.find(p => p.runtimeTableId === boardId);
+      if (!pairing || pairing.result) return;
+
+      let result: string;
+      if (match.result === 'checkmate' || match.result === 'resign' || match.result === 'timeout' || match.result === 'abandon') {
+        if (match.winnerId === pairing.whitePlayerId) {
+          result = '1-0';
+        } else if (match.winnerId === pairing.blackPlayerId) {
+          result = '0-1';
+        } else {
+          result = '1/2-1/2';
+        }
+      } else {
+        result = '1/2-1/2';
+      }
+
+      await coordinator.reportMatchResult(instance.id, instance.currentRound, pairing.boardNumber, result, match.result || 'normal');
+      console.log(`[WorldRoom] Tournament result reported: board ${pairing.boardNumber} = ${result} (${match.result})`);
+    } catch (err: any) {
+      console.error(`[WorldRoom] Failed to report tournament result:`, err.message);
+    }
   }
 
   private startMatch(board: BoardState, joiningPlayer: PlayerState, joiningClient: Client) {

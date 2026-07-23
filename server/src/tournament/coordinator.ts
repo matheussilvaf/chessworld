@@ -397,7 +397,15 @@ async function checkPresenceDeadlines(instance: TournamentInstance): Promise<voi
     const whitePresent = p.white_player_id && await isPlayerPresent(p.white_player_id);
     const blackPresent = p.black_player_id && await isPlayerPresent(p.black_player_id);
 
-    if (whitePresent && !blackPresent) {
+    if (whitePresent && blackPresent) {
+      // Both present and playing - clear the deadline
+      await db
+        .from('tournament_pairings')
+        .update({ presence_deadline: null })
+        .eq('id', p.id)
+        .is('result', null);
+      continue;
+    } else if (whitePresent && !blackPresent) {
       result = '+/-';
       reason = 'forfeit';
     } else if (!whitePresent && blackPresent) {
