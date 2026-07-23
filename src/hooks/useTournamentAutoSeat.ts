@@ -36,8 +36,7 @@ export function useTournamentAutoSeat(
       return;
     }
     if (!myPairing.runtimeTableId) return;
-    if (myPairing.result) {
-      seatedForRound.current = state.currentRound;
+    if (myPairing.result && seatedForRound.current === state.currentRound) {
       return;
     }
 

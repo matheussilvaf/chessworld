@@ -1998,7 +1998,8 @@ export class WorldScene extends Phaser.Scene {
     if (bounds.minY < 0) {
       this.matter.world.setBounds(0, bounds.minY, totalWidth, totalHeight);
       this.cameraBounds = { x: 0, y: bounds.minY, w: totalWidth, h: totalHeight };
-      this.cameras.main.setBounds(0, bounds.minY, totalWidth, totalHeight);
+      // Don't use Phaser's setBounds — it conflicts with manual snapCameraToTarget clamping
+      this.cameras.main.removeBounds();
     }
 
     // Rebuild pathfinder with expanded area including module collisions
@@ -2062,7 +2063,7 @@ export class WorldScene extends Phaser.Scene {
       const mapHeight = tmjData.height * (tmjData.tileheight || 32);
       this.matter.world.setBounds(0, 0, mapWidth, mapHeight);
       this.cameraBounds = { x: 0, y: 0, w: mapWidth, h: mapHeight };
-      this.cameras.main.setBounds(0, 0, mapWidth, mapHeight);
+      this.cameras.main.removeBounds();
       this.pathfinder = new AStarGrid(16);
       this.pathfinder.buildGrid(mapWidth, mapHeight, this.collisionRects, this.collisionPolys, 12);
     }
