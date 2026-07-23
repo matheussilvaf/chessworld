@@ -1834,47 +1834,63 @@ export class WorldScene extends Phaser.Scene {
   }
 
   public unseatPlayerToReception() {
-    if (!this.currentSeatInfo && !this.movementLocked) return;
-    this.currentSeatInfo = null;
-
+    // Stop any active seat tween
     if (this.seatTween) {
       this.seatTween.stop();
       this.seatTween = null;
     }
 
+    // Stop any active tweens on the player sprite
+    this.tweens.killTweensOf(this.player);
+
+    // Clear seat info and pathfinding
+    this.currentSeatInfo = null;
+    this.target = null;
+    this.pathWaypoints = [];
+
+    // Reset velocity
+    this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
+
+    // Restore texture and rotation
     const charDef = getCharacter();
     this.player.setTexture(charDef.id);
     this.player.setRotation(0);
-    this.player.setFrame(getIdleFrame(this.currentDirection));
 
-    const pos = this.findRandomWalkablePosition();
+    // Find a safe position in the reception center
+    const pos = this.findRandomWalkableReceptionCenterTile();
     const targetBodyX = pos.x + this.playerFeetOffsetX;
     const targetBodyY = pos.y + this.playerFeetOffset;
 
-    this.player.setAlpha(0);
+    // Restore body to non-static and reset collision filter
+    this.matter.body.setStatic(this.playerBody, false);
+    this.restorePhysics();
+
+    // Teleport body and sprite
     this.matter.body.setPosition(this.playerBody, { x: targetBodyX, y: targetBodyY });
     this.player.x = Math.round(pos.x);
     this.player.y = Math.round(pos.y);
 
+    // Set direction and idle frame
+    this.currentDirection = 'down';
+    this.player.anims.stop();
+    this.player.setFrame(getIdleFrame(this.currentDirection));
+
+    // Restore camera and unlock movement
+    this.targetZoom = this.defaultZoom;
+    this.cameraFollowing = true;
+    this.movementLocked = false;
+
+    // Sync position to network immediately (before modules are destroyed)
+    this.emitMovement(false, this.currentDirection);
+
+    // Fade in for visual feedback
+    this.player.setAlpha(0);
     this.tweens.add({
       targets: this.player,
       alpha: 1,
-      duration: 400,
+      duration: 300,
       ease: 'Power2',
-      onComplete: () => {
-        this.currentDirection = 'down';
-        this.player.anims.stop();
-        this.player.setFrame(getIdleFrame(this.currentDirection));
-        this.seatTween = null;
-        this.matter.body.setStatic(this.playerBody, false);
-        this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
-        this.restorePhysics();
-        this.unlockMovement();
-        this.emitMovement(false, this.currentDirection);
-      },
     });
-    this.targetZoom = this.defaultZoom;
-    this.cameraFollowing = true;
   }
 
   private findRandomWalkablePosition(): { x: number; y: number } {
@@ -1902,6 +1918,100 @@ export class WorldScene extends Phaser.Scene {
       }
     }
     return { x: mapWidth / 2, y: mapHeight / 2 };
+  }
+
+  private findRandomWalkableReceptionCenterTile(): { x: number; y: number } {
+    const tmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
+    if (!tmjData) return { x: 400, y: 400 };
+
+    const tw = tmjData.tilewidth || 32;
+    const th = tmjData.tileheight || 32;
+    const mapWidthPx = tmjData.width * tw;
+    const mapHeightPx = tmjData.height * th;
+    const bodyRadius = getBodyConfig().radius;
+
+    const tryRegion = (xMin: number, xMax: number, yMin: number, yMax: number): { x: number; y: number } | null => {
+      const colStart = Math.max(0, Math.floor(xMin / tw));
+      const colEnd = Math.min(tmjData.width - 1, Math.floor(xMax / tw));
+      const rowStart = Math.max(0, Math.floor(yMin / th));
+      const rowEnd = Math.min(tmjData.height - 1, Math.floor(yMax / th));
+
+      const candidates: { x: number; y: number }[] = [];
+      for (let row = rowStart; row <= rowEnd; row++) {
+        for (let col = colStart; col <= colEnd; col++) {
+          const cx = col * tw + tw / 2;
+          const cy = row * th + th / 2;
+          candidates.push({ x: cx, y: cy });
+        }
+      }
+
+      // Shuffle candidates (Fisher-Yates)
+      for (let i = candidates.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+      }
+
+      for (const pt of candidates) {
+        if (this.isTileBlocked(pt.x, pt.y, bodyRadius)) continue;
+        return pt;
+      }
+      return null;
+    };
+
+    // Try 40% center region first
+    const center40 = tryRegion(
+      mapWidthPx * 0.3, mapWidthPx * 0.7,
+      mapHeightPx * 0.3, mapHeightPx * 0.7,
+    );
+    if (center40) return center40;
+
+    // Try 60% center region
+    const center60 = tryRegion(
+      mapWidthPx * 0.2, mapWidthPx * 0.8,
+      mapHeightPx * 0.2, mapHeightPx * 0.8,
+    );
+    if (center60) return center60;
+
+    // Full map fallback
+    const full = tryRegion(0, mapWidthPx, 0, mapHeightPx);
+    if (full) return full;
+
+    return { x: mapWidthPx / 2, y: mapHeightPx / 2 };
+  }
+
+  private isTileBlocked(cx: number, cy: number, radius: number): boolean {
+    const testPoints = [
+      { x: cx, y: cy },
+      { x: cx - radius, y: cy },
+      { x: cx + radius, y: cy },
+      { x: cx, y: cy - radius },
+      { x: cx, y: cy + radius },
+    ];
+
+    for (const rect of this.collisionRects) {
+      const expanded = {
+        x: rect.x - radius,
+        y: rect.y - radius,
+        width: rect.width + radius * 2,
+        height: rect.height + radius * 2,
+      };
+      if (cx >= expanded.x && cx <= expanded.x + expanded.width &&
+          cy >= expanded.y && cy <= expanded.y + expanded.height) {
+        return true;
+      }
+    }
+
+    for (const poly of this.collisionPolys) {
+      if (poly.length < 3) continue;
+      const phaserPoly = new Phaser.Geom.Polygon(poly);
+      for (const pt of testPoints) {
+        if (Phaser.Geom.Polygon.Contains(phaserPoly, pt.x, pt.y)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   private restorePhysics() {
@@ -2045,35 +2155,54 @@ export class WorldScene extends Phaser.Scene {
   }
 
   public removeArenaModules() {
-    // If player is in the arena area (negative Y), teleport them back to reception first
+    if (!this.arenaManager) return;
+
+    // 1. Get reception dimensions from the cached TMJ
+    const tmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
+    const tw = tmjData?.tilewidth || 32;
+    const th = tmjData?.tileheight || 32;
+    const receptionWidth = tmjData ? tmjData.width * tw : 9999;
+    const receptionHeight = tmjData ? tmjData.height * th : 9999;
+
+    // 2. Get module bounds and table IDs before removal
+    const moduleBounds = this.arenaManager.getBounds();
+    const arenaTableIds = new Set(this.arenaManager.getTableAnchors().keys());
+
+    // 3. Determine if the local player needs to be returned to reception
     if (this.player && this.playerBody) {
-      const playerY = this.playerBody.position.y;
-      if (playerY < 0) {
+      const px = this.playerBody.position.x;
+      const py = this.playerBody.position.y;
+
+      const isOutsideReception = px < 0 || py < 0 || px > receptionWidth || py > receptionHeight;
+      const isInModuleRegion = moduleBounds.minY !== 0 && py <= moduleBounds.minY;
+      const isSeatedAtModuleTable = this.currentSeatInfo != null && arenaTableIds.has(this.currentSeatInfo.tableId);
+
+      if (isOutsideReception || isInModuleRegion || isSeatedAtModuleTable) {
+        // 4. Teleport player to reception center and sync immediately
         this.unseatPlayerToReception();
       }
     }
 
-    if (this.arenaManager) {
-      const tableAnchors = this.arenaManager.getTableAnchors();
-      for (const runtimeId of tableAnchors.keys()) {
-        this.tableRegistry.tables.delete(runtimeId);
-        if (this.chessOverlay) {
-          try { this.chessOverlay.unregisterTable(runtimeId); } catch { /* already removed */ }
-        }
+    // 5. Clean up runtime tables and overlays
+    for (const runtimeId of arenaTableIds) {
+      this.tableRegistry.tables.delete(runtimeId);
+      if (this.chessOverlay) {
+        try { this.chessOverlay.unregisterTable(runtimeId); } catch { /* already removed */ }
       }
-      this.arenaManager.removeAll();
     }
 
-    // Restore bounds to current map and rebuild pathfinder
-    const tmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
+    // 6. Destroy module layers, sprites, bodies
+    this.arenaManager.removeAll();
+
+    // 7. Restore physics and camera bounds to reception dimensions
     if (tmjData) {
-      const mapWidth = tmjData.width * (tmjData.tilewidth || 32);
-      const mapHeight = tmjData.height * (tmjData.tileheight || 32);
-      this.matter.world.setBounds(0, 0, mapWidth, mapHeight);
-      this.cameraBounds = { x: 0, y: 0, w: mapWidth, h: mapHeight };
+      this.matter.world.setBounds(0, 0, receptionWidth, receptionHeight);
+      this.cameraBounds = { x: 0, y: 0, w: receptionWidth, h: receptionHeight };
       this.cameras.main.removeBounds();
+
+      // 8. Rebuild pathfinder with only reception collisions
       this.pathfinder = new AStarGrid(16);
-      this.pathfinder.buildGrid(mapWidth, mapHeight, this.collisionRects, this.collisionPolys, 12);
+      this.pathfinder.buildGrid(receptionWidth, receptionHeight, this.collisionRects, this.collisionPolys, 12);
     }
   }
 
