@@ -573,7 +573,7 @@ async function createRoundRecords(
   }
 
   const now = new Date();
-  const presenceDeadline = new Date(now.getTime() + 30_000).toISOString();
+  const presenceDeadline = new Date(now.getTime() + 60_000).toISOString();
 
   for (const pairing of round.pairings) {
     const white = playerMap.get(pairing.whiteTpn);
@@ -926,12 +926,12 @@ export async function reportMatchResult(
 }
 
 async function isPlayerPresent(playerId: string): Promise<boolean> {
-  // Check if TournamentRoom has this player connected
   const room = getTournamentRoomInstance();
-  if (room) {
-    return room.isPlayerPresent(playerId);
+  if (!room) {
+    // If room reference not available, assume present (don't auto-forfeit)
+    return true;
   }
-  return true;
+  return room.isPlayerPresent(playerId);
 }
 
 function mapInstance(row: any): TournamentInstance {

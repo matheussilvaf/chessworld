@@ -2067,6 +2067,12 @@ export class WorldScene extends Phaser.Scene {
     const tileHeight = tmjData.tileheight || 16;
     const mapWidth = tmjData.width;
 
+    // Normalize tilesets: external refs use 'source' instead of 'name'
+    const normalizedTilesets = (tmjData.tilesets || []).map((ts: any) => ({
+      firstgid: ts.firstgid,
+      name: ts.name || (ts.source ? ts.source.replace(/\.(tsx|tsj|json)$/, '') : ''),
+    }));
+
     const processLayers = (layers: any[], depth: number) => {
       for (const l of layers) {
         if (l.type === 'group') {
@@ -2087,7 +2093,7 @@ export class WorldScene extends Phaser.Scene {
             const y = row * tileHeight + offsetY;
 
             // Find the tileset for this GID
-            const tsInfo = findTilesetForGidInMap(gid, tmjData.tilesets);
+            const tsInfo = findTilesetForGidInMap(gid, normalizedTilesets);
             if (!tsInfo) continue;
 
             const textureKey = tsInfo.textureKey;
