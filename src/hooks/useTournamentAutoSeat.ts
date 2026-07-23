@@ -80,12 +80,6 @@ export function useTournamentAutoSeat(
         seatPlayerWhenReady(msg.boardId, 'player', msg.seat, msg.color as 'w' | 'b');
         seating.current = false;
       });
-
-      room.onMessage('match_started', (msg: { matchId: string; boardId: string; color: string }) => {
-        const seat = msg.color === 'w' ? 'bottom' : 'top';
-        seatPlayerWhenReady(msg.boardId, 'player', seat, msg.color as 'w' | 'b');
-        seating.current = false;
-      });
     }
   }, [state.status, state.currentRound, state.pairings, state.modules, user, connected]);
 

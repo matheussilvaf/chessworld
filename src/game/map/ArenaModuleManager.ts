@@ -1,4 +1,5 @@
-import { ALL_TILESETS, findTilesetForGidInMap, type TilesetEntry } from '../config/worldAssets';
+import { ALL_TILESETS, findTilesetForGidInMap, getTextureKeyForTileset, type TilesetEntry } from '../config/worldAssets';
+import { MAP_CONFIG } from '../config/mapConfig';
 
 export interface ModuleConfig {
   instanceId: string;
@@ -17,9 +18,12 @@ interface ModuleInstance {
   instanceId: string;
   offsetX: number;
   offsetY: number;
+  tilemap: Phaser.Tilemaps.Tilemap | null;
+  layers: Phaser.Tilemaps.TilemapLayer[];
   sprites: Phaser.GameObjects.Sprite[];
   bodies: MatterJS.BodyType[];
   tableAnchors: Map<string, TableAnchorSet>;
+  collisionRects: Array<{ x: number; y: number; width: number; height: number }>;
 }
 
 export interface TableAnchorSet {
@@ -85,11 +89,10 @@ export class ArenaModuleManager {
       }
     }
 
-    // Render door visuals from dynamic_visuals layer
     const dynamicVisuals = this.findObjectLayer(tmjData.layers, 'dynamic_visuals');
     if (!dynamicVisuals) return;
 
-    const tmjTilesets = tmjData.tilesets || [];
+    const tmjTilesets = this.normalizeTilesets(tmjData.tilesets || []);
     for (const obj of dynamicVisuals) {
       if (!obj.gid) continue;
       const props = this.getObjProps(obj);
@@ -102,7 +105,7 @@ export class ArenaModuleManager {
 
       if (props.visualState === 'closed') {
         this.doorClosedSprite = sprite;
-        sprite.setDepth(3); // below player characters
+        sprite.setDepth(3);
         sprite.setVisible(true);
       } else if (props.visualState === 'open') {
         this.doorOpenSprite = sprite;
@@ -120,7 +123,6 @@ export class ArenaModuleManager {
       this.scene.matter.world.remove(this.doorBlockerBody);
       this.doorBlockerBody = null;
     } else if (!open && !this.doorBlockerBody && this.doorBlockerRect) {
-      // Re-create blocker when door closes
       const { x, y, w, h } = this.doorBlockerRect;
       this.doorBlockerBody = this.scene.matter.add.rectangle(x, y, w, h, {
         isStatic: true,
@@ -129,18 +131,17 @@ export class ArenaModuleManager {
     }
   }
 
-  public async loadModules(
+  public loadModules(
     modules: ModuleConfig[],
     tables: TableMapping[],
     receptionTmjKey: string,
-  ): Promise<{ minY: number; maxY: number; width: number }> {
+  ): { minY: number; maxY: number; width: number } {
     if (this.loaded) return this.getBounds();
     if (modules.length === 0) return { minY: 0, maxY: 0, width: 0 };
 
     const receptionTmj = this.scene.cache.tilemap.get(receptionTmjKey)?.data;
     if (!receptionTmj) return { minY: 0, maxY: 0, width: 0 };
 
-    // Find reception_north_connector
     const receptionConnector = this.findConnector(receptionTmj.layers, 'reception_north_connector');
     if (!receptionConnector) {
       console.warn('[ArenaModuleManager] reception_north_connector not found');
@@ -156,11 +157,12 @@ export class ArenaModuleManager {
 
     for (const mod of sorted) {
       const mapKey = MODULE_PATHS[mod.moduleType] || mod.moduleType;
-      const tmjData = this.scene.cache.tilemap.get(mapKey)?.data;
-      if (!tmjData) {
+      const tmjEntry = this.scene.cache.tilemap.get(mapKey);
+      if (!tmjEntry?.data) {
         console.warn(`[ArenaModuleManager] No TMJ data for ${mapKey}`);
         continue;
       }
+      const tmjData = tmjEntry.data;
 
       const connectors = MODULE_CONNECTORS[mod.moduleType];
       if (!connectors) continue;
@@ -171,25 +173,20 @@ export class ArenaModuleManager {
         continue;
       }
 
-      // Offset: align south connector of module with previous north connector
       const offsetX = previousNorth.x - southConn.x;
       const offsetY = previousNorth.y - southConn.y;
 
-      const modInstance = this.renderModule(mod.instanceId, tmjData, offsetX, offsetY);
+      const modInstance = this.renderModule(mod.instanceId, mapKey, tmjData, offsetX, offsetY);
 
-      // Register table anchors
       const moduleTables = tables.filter(t => t.moduleInstanceId === mod.instanceId);
       this.extractTableAnchors(tmjData, offsetX, offsetY, mod.instanceId, moduleTables, modInstance);
 
       this.modules.push(modInstance);
 
-      // Update bounds
       const modWidth = tmjData.width * (tmjData.tilewidth || 32);
-      const modHeight = tmjData.height * (tmjData.tileheight || 32);
       this.totalBounds.minY = Math.min(this.totalBounds.minY, offsetY);
       this.totalBounds.maxX = Math.max(this.totalBounds.maxX, offsetX + modWidth);
 
-      // Find north connector for next module
       if (connectors.north) {
         const northConn = this.findConnector(tmjData.layers, connectors.north);
         if (northConn) {
@@ -203,95 +200,113 @@ export class ArenaModuleManager {
     return this.getBounds();
   }
 
-  private renderModule(instanceId: string, tmjData: any, offsetX: number, offsetY: number): ModuleInstance {
+  private renderModule(instanceId: string, mapKey: string, tmjData: any, offsetX: number, offsetY: number): ModuleInstance {
     const modInstance: ModuleInstance = {
       instanceId,
       offsetX,
       offsetY,
+      tilemap: null,
+      layers: [],
       sprites: [],
       bodies: [],
       tableAnchors: new Map(),
+      collisionRects: [],
     };
 
-    const tileWidth = tmjData.tilewidth || 32;
-    const tileHeight = tmjData.tileheight || 32;
-    const mapCols = tmjData.width;
+    // Create a Phaser tilemap from the cached TMJ data
+    // First, we need to patch the tilesets to have inline names (Phaser doesn't support external .tsx)
+    this.patchTmjTilesets(tmjData);
 
-    // Normalize tilesets (external refs use 'source' instead of 'name')
-    const normalizedTilesets = (tmjData.tilesets || []).map((ts: any) => ({
-      firstgid: ts.firstgid,
-      name: ts.name || (ts.source ? ts.source.replace(/\.(tsx|tsj|json)$/, '') : ''),
-    }));
+    const tilemap = this.scene.make.tilemap({ key: mapKey });
+    modInstance.tilemap = tilemap;
 
-    // 1. Render tile layers
-    this.renderTileLayers(tmjData.layers, normalizedTilesets, tileWidth, tileHeight, mapCols, offsetX, offsetY, modInstance);
+    // Add tilesets to the tilemap
+    const tilesets: Phaser.Tilemaps.Tileset[] = [];
+    const normalizedTs = this.normalizeTilesets(tmjData.tilesets || []);
+    for (const ts of tmjData.tilesets || []) {
+      const name = ts.name || (ts.source ? ts.source.replace(/\.(tsx|tsj|json)$/, '') : '');
+      if (!name) continue;
+      const textureKey = getTextureKeyForTileset(name);
+      if (!textureKey) continue;
+      const entry = ALL_TILESETS.find(e => e.textureKey === textureKey);
+      if (entry?.isSingleImage) continue; // single-image tilesets are rendered as sprites
+      const added = tilemap.addTilesetImage(name, textureKey);
+      if (added) tilesets.push(added);
+    }
 
-    // 2. Render GID objects (chess tables, decorations)
-    this.renderGidObjects(tmjData.layers, normalizedTilesets, offsetX, offsetY, modInstance);
+    // Create tile layers and position them at offset
+    const logicalLayers = new Set([
+      'collisions', 'module_connectors', 'character_anchors', 'spawns',
+      'ui anchors', 'camera_anchors', 'chess_tables_interactions',
+    ]);
 
-    // 3. Add collisions
+    for (let i = 0; i < tilemap.layers.length; i++) {
+      const layerData = tilemap.layers[i];
+      const lname = layerData.name.toLowerCase();
+      if (logicalLayers.has(lname)) continue;
+      if (layerData.tilemapLayer) continue;
+
+      const layer = tilemap.createLayer(i, tilesets);
+      if (layer) {
+        layer.setPosition(offsetX, offsetY);
+        layer.setDepth(lname.includes('above') ? 200 : 0);
+        (layer as any).setCullPadding?.(2, 2);
+        const texture = layer.tileset?.[0]?.image;
+        if (texture) {
+          this.scene.textures.get(texture.key || '')?.setFilter(Phaser.Textures.FilterMode.NEAREST);
+        }
+        modInstance.layers.push(layer);
+      }
+    }
+
+    // Set NEAREST filter on all module tilesets
+    for (const ts of normalizedTs) {
+      const textureKey = getTextureKeyForTileset(ts.name);
+      if (textureKey && this.scene.textures.exists(textureKey)) {
+        this.scene.textures.get(textureKey).setFilter(Phaser.Textures.FilterMode.NEAREST);
+      }
+    }
+
+    // Render GID objects (chess tables etc.) as sprites
+    this.renderGidObjects(tmjData.layers, normalizedTs, offsetX, offsetY, modInstance);
+
+    // Add collision bodies
     this.addCollisions(tmjData.layers, offsetX, offsetY, modInstance);
 
     return modInstance;
   }
 
-  private renderTileLayers(
-    layers: any[],
-    tilesets: { firstgid: number; name: string }[],
-    tileWidth: number,
-    tileHeight: number,
-    mapCols: number,
-    offsetX: number,
-    offsetY: number,
-    modInstance: ModuleInstance,
-  ) {
-    for (const l of layers) {
-      if (l.type === 'group') {
-        this.renderTileLayers(l.layers || [], tilesets, tileWidth, tileHeight, mapCols, offsetX, offsetY, modInstance);
-      } else if (l.type === 'tilelayer' && l.data && l.visible !== false) {
-        const name = (l.name || '').toLowerCase();
-        for (let i = 0; i < l.data.length; i++) {
-          const rawGid = l.data[i];
-          if (rawGid === 0) continue;
-
-          const gid = rawGid & 0x0FFFFFFF;
-          const col = i % mapCols;
-          const row = Math.floor(i / mapCols);
-          const x = col * tileWidth + offsetX;
-          const y = row * tileHeight + offsetY;
-
-          const tsInfo = findTilesetForGidInMap(gid, tilesets);
-          if (!tsInfo) continue;
-
-          const textureKey = tsInfo.textureKey;
-          if (!this.scene.textures.exists(textureKey)) continue;
-
-          if (tsInfo.isSingleImage) {
-            const sprite = this.scene.add.sprite(x + tileWidth / 2, y + tileHeight / 2, textureKey);
-            sprite.setOrigin(0.5, 0.5);
-            sprite.setDisplaySize(tileWidth, tileHeight);
-            sprite.setDepth(name.includes('above') ? 200 : 0);
-            modInstance.sprites.push(sprite);
-          } else {
-            const localId = gid - tsInfo.firstgid;
-            const texSource = this.scene.textures.get(textureKey).source[0];
-            const tsWidth = texSource?.width || 256;
-            const columns = Math.floor(tsWidth / tileWidth);
-            if (columns === 0) continue;
-
-            const frameX = (localId % columns) * tileWidth;
-            const frameY = Math.floor(localId / columns) * tileHeight;
-
-            const frameName = `${textureKey}_tile_${localId}`;
-            const tex = this.scene.textures.get(textureKey);
-            if (!tex.has(frameName)) {
-              tex.add(frameName, 0, frameX, frameY, tileWidth, tileHeight);
-            }
-
-            const sprite = this.scene.add.sprite(x + tileWidth / 2, y + tileHeight / 2, textureKey, frameName);
-            sprite.setOrigin(0.5, 0.5);
-            sprite.setDepth(name.includes('above') ? 200 : 0);
-            modInstance.sprites.push(sprite);
+  private patchTmjTilesets(tmjData: any) {
+    if (!tmjData.tilesets) return;
+    for (const ts of tmjData.tilesets) {
+      if (ts.source && !ts.name) {
+        const name = ts.source.replace(/\.(tsx|tsj|json)$/, '');
+        ts.name = name;
+        // Phaser needs these for spritesheet tilesets
+        const textureKey = getTextureKeyForTileset(name);
+        if (textureKey && this.scene.textures.exists(textureKey)) {
+          const texSource = this.scene.textures.get(textureKey).source[0];
+          const entry = ALL_TILESETS.find(e => e.textureKey === textureKey);
+          if (entry && !entry.isSingleImage) {
+            ts.tilewidth = tmjData.tilewidth || 32;
+            ts.tileheight = tmjData.tileheight || 32;
+            ts.imagewidth = texSource?.width || 256;
+            ts.imageheight = texSource?.height || 256;
+            ts.image = entry.image;
+            ts.margin = ts.margin || 0;
+            ts.spacing = ts.spacing || 0;
+            ts.columns = Math.floor((ts.imagewidth) / ts.tilewidth);
+            ts.tilecount = ts.columns * Math.floor((ts.imageheight) / ts.tileheight);
+            delete ts.source;
+          } else if (entry?.isSingleImage) {
+            // Keep as image collection - single tile
+            ts.tilewidth = texSource?.width || 256;
+            ts.tileheight = texSource?.height || 256;
+            ts.tilecount = 1;
+            ts.columns = 0;
+            ts.tiles = [{ id: 0, image: entry.image, imagewidth: texSource?.width || 256, imageheight: texSource?.height || 256 }];
+            delete ts.source;
+            delete ts.image;
           }
         }
       }
@@ -310,8 +325,9 @@ export class ArenaModuleManager {
         this.renderGidObjects(l.layers || [], tilesets, offsetX, offsetY, modInstance);
       } else if (l.type === 'objectgroup') {
         const name = (l.name || '').toLowerCase();
-        // Skip logical layers
-        if (name === 'collisions' || name === 'module_connectors' || name.includes('character_anchors') || name === 'spawns' || name === 'ui anchors' || name === 'camera_anchors' || name === 'chess_tables_interactions') continue;
+        if (name === 'collisions' || name === 'module_connectors' || name.includes('character_anchors') ||
+            name === 'spawns' || name === 'ui anchors' || name === 'camera_anchors' ||
+            name === 'chess_tables_interactions' || name === 'dynamic_visuals' || name === 'dynamic_collisions') continue;
 
         for (const obj of l.objects || []) {
           if (!obj.gid || obj.visible === false) continue;
@@ -320,21 +336,13 @@ export class ArenaModuleManager {
           const gid = rawGid & 0x0FFFFFFF;
           const tsInfo = findTilesetForGidInMap(gid, tilesets);
           if (!tsInfo) continue;
+          if (!this.scene.textures.exists(tsInfo.textureKey)) continue;
 
-          const textureKey = tsInfo.textureKey;
-          if (!this.scene.textures.exists(textureKey)) continue;
-
-          // Tiled places objects with bottom-left origin
-          const sprite = this.scene.add.sprite(obj.x + offsetX, obj.y + offsetY, textureKey);
+          const sprite = this.scene.add.sprite(obj.x + offsetX, obj.y + offsetY, tsInfo.textureKey);
           sprite.setOrigin(0, 1);
           sprite.setDisplaySize(obj.width || 32, obj.height || 32);
+          sprite.setDepth(10);
 
-          // Determine depth
-          const props = this.getObjProps(obj);
-          const isAbove = name.includes('above') || props.renderLayer === 'above_characters';
-          sprite.setDepth(isAbove ? 200 : 10);
-
-          // Handle flipping
           const FLIPPED_H = 0x80000000;
           const FLIPPED_V = 0x40000000;
           if (rawGid & FLIPPED_H) sprite.setFlipX(true);
@@ -370,6 +378,12 @@ export class ArenaModuleManager {
         const cy = obj.y + obj.height / 2 + offsetY;
         const body = this.scene.matter.add.rectangle(cx, cy, obj.width, obj.height, { isStatic: true });
         if (body) modInstance.bodies.push(body);
+        modInstance.collisionRects.push({
+          x: obj.x + offsetX,
+          y: obj.y + offsetY,
+          width: obj.width,
+          height: obj.height,
+        });
       }
     }
   }
@@ -385,7 +399,6 @@ export class ArenaModuleManager {
     const anchorsLayer = this.findObjectLayer(tmjData.layers, 'character_anchors');
     if (!anchorsLayer) return;
 
-    // Extract overlay areas from 'ui anchors' layer
     const uiAnchorsLayer = this.findObjectLayer(tmjData.layers, 'ui anchors');
     const overlayBySlot = new Map<string, { x: number; y: number; width: number; height: number; boardFiles: number; boardRanks: number }>();
     if (uiAnchorsLayer) {
@@ -404,7 +417,6 @@ export class ArenaModuleManager {
       }
     }
 
-    // Extract camera focus from 'camera_anchors' layer
     const cameraAnchorsLayer = this.findObjectLayer(tmjData.layers, 'camera_anchors');
     const cameraBySlot = new Map<string, { x: number; y: number; width: number; height: number; padding: number }>();
     if (cameraAnchorsLayer) {
@@ -422,7 +434,6 @@ export class ArenaModuleManager {
       }
     }
 
-    // Group anchors by tableId
     const byTable = new Map<string, any[]>();
     for (const obj of anchorsLayer) {
       const props = this.getObjProps(obj);
@@ -448,7 +459,7 @@ export class ArenaModuleManager {
         return match ? { x: match.x, y: match.y, direction: (match._props.direction as string) || 'down' } : { x: 0, y: 0, direction: 'down' };
       };
 
-      const anchorSet: TableAnchorSet = {
+      modInstance.tableAnchors.set(runtimeId, {
         tableId: runtimeId,
         playerTop: find('chess_seat', 'player', 'top'),
         playerBottom: find('chess_seat', 'player', 'bottom'),
@@ -462,9 +473,7 @@ export class ArenaModuleManager {
         exitRight: find('chess_seat_exit', 'spectator', undefined, 'right'),
         overlayArea: overlayBySlot.get(slotId) || null,
         cameraFocus: cameraBySlot.get(slotId) || null,
-      };
-
-      modInstance.tableAnchors.set(runtimeId, anchorSet);
+      });
     }
   }
 
@@ -478,10 +487,20 @@ export class ArenaModuleManager {
     return all;
   }
 
+  public getCollisionRects(): Array<{ x: number; y: number; width: number; height: number }> {
+    const rects: Array<{ x: number; y: number; width: number; height: number }> = [];
+    for (const mod of this.modules) {
+      rects.push(...mod.collisionRects);
+    }
+    return rects;
+  }
+
   public removeAll() {
     for (const mod of this.modules) {
+      for (const layer of mod.layers) layer.destroy();
       for (const sprite of mod.sprites) sprite.destroy();
       for (const body of mod.bodies) this.scene.matter.world.remove(body);
+      if (mod.tilemap) mod.tilemap.destroy();
     }
     this.modules = [];
     this.loaded = false;
@@ -496,6 +515,13 @@ export class ArenaModuleManager {
   }
 
   // --- Helpers ---
+
+  private normalizeTilesets(tilesets: any[]): { firstgid: number; name: string }[] {
+    return tilesets.map((ts: any) => ({
+      firstgid: ts.firstgid,
+      name: ts.name || (ts.source ? ts.source.replace(/\.(tsx|tsj|json)$/, '') : ''),
+    }));
+  }
 
   private findConnector(layers: any[], name: string): { x: number; y: number } | null {
     for (const l of layers) {

@@ -1905,25 +1905,32 @@ export class WorldScene extends Phaser.Scene {
   // Tournament arena module system
   public arenaManager: ArenaModuleManager | null = null;
 
-  public async loadArenaModules(modules: Array<{ instanceId: string; moduleType: string; order: number }>, tables?: Array<{ runtimeTableId: string; tableNumber: number; moduleInstanceId: string; localSlotId: string }>) {
+  public loadArenaModules(modules: Array<{ instanceId: string; moduleType: string; order: number }>, tables?: Array<{ runtimeTableId: string; tableNumber: number; moduleInstanceId: string; localSlotId: string }>) {
     if (!this.arenaManager) {
       this.arenaManager = new ArenaModuleManager(this);
     }
     if (this.arenaManager.isLoaded) return;
 
-    const bounds = await this.arenaManager.loadModules(modules, tables || [], this.currentMapKey);
+    const bounds = this.arenaManager.loadModules(modules, tables || [], this.currentMapKey);
 
     // Expand world and camera bounds to include modules
+    const currentTmj = this.cache.tilemap.get(this.currentMapKey)?.data;
+    const recWidth = currentTmj ? currentTmj.width * (currentTmj.tilewidth || 32) : 1440;
+    const recHeight = currentTmj ? currentTmj.height * (currentTmj.tileheight || 32) : 896;
+    const totalWidth = Math.max(recWidth, bounds.width);
+    const totalHeight = recHeight + Math.abs(bounds.minY);
+
     if (bounds.minY < 0) {
-      const currentTmj = this.cache.tilemap.get(this.currentMapKey)?.data;
-      const recWidth = currentTmj ? currentTmj.width * (currentTmj.tilewidth || 32) : 1440;
-      const recHeight = currentTmj ? currentTmj.height * (currentTmj.tileheight || 32) : 896;
-      const totalWidth = Math.max(recWidth, bounds.width);
-      const totalHeight = recHeight - bounds.minY;
       this.matter.world.setBounds(0, bounds.minY, totalWidth, totalHeight);
       this.cameraBounds = { x: 0, y: bounds.minY, w: totalWidth, h: totalHeight };
       this.cameras.main.setBounds(0, bounds.minY, totalWidth, totalHeight);
     }
+
+    // Rebuild pathfinder with expanded area including module collisions
+    const moduleCollisionRects = this.arenaManager.getCollisionRects();
+    const allRects = [...this.collisionRects, ...moduleCollisionRects];
+    this.pathfinder = new AStarGrid(16);
+    this.pathfinder.buildGrid(totalWidth, totalHeight, allRects, this.collisionPolys, 12, 0, bounds.minY);
 
     // Register table anchors in the table registry
     const tableAnchors = this.arenaManager.getTableAnchors();
@@ -1956,11 +1963,13 @@ export class WorldScene extends Phaser.Scene {
         this.chessOverlay.showMatchOverlay(runtimeId, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
       }
     }
+
+    console.log('[WorldScene] Arena modules loaded, tables registered:', tableAnchors.size,
+      'pathfinder rebuilt with origin Y:', bounds.minY);
   }
 
   public removeArenaModules() {
     if (this.arenaManager) {
-      // Get anchors before removing so we can delete them from registry
       const tableAnchors = this.arenaManager.getTableAnchors();
       for (const runtimeId of tableAnchors.keys()) {
         this.tableRegistry.tables.delete(runtimeId);
@@ -1971,7 +1980,7 @@ export class WorldScene extends Phaser.Scene {
       this.arenaManager.removeAll();
     }
 
-    // Restore bounds to current map
+    // Restore bounds to current map and rebuild pathfinder
     const tmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
     if (tmjData) {
       const mapWidth = tmjData.width * (tmjData.tilewidth || 32);
@@ -1979,6 +1988,8 @@ export class WorldScene extends Phaser.Scene {
       this.matter.world.setBounds(0, 0, mapWidth, mapHeight);
       this.cameraBounds = { x: 0, y: 0, w: mapWidth, h: mapHeight };
       this.cameras.main.setBounds(0, 0, mapWidth, mapHeight);
+      this.pathfinder = new AStarGrid(16);
+      this.pathfinder.buildGrid(mapWidth, mapHeight, this.collisionRects, this.collisionPolys, 12);
     }
   }
 

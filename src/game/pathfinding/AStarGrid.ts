@@ -116,6 +116,8 @@ export default class AStarGrid {
   private cellSize: number;
   private gridWidth: number = 0;
   private gridHeight: number = 0;
+  private originX: number = 0;
+  private originY: number = 0;
   /** Flat boolean array: true = blocked. Indexed as [y * gridWidth + x] */
   private blocked: Uint8Array = new Uint8Array(0);
 
@@ -131,8 +133,12 @@ export default class AStarGrid {
     mapHeight: number,
     rects: Rect[],
     polys: Point[][],
-    inflate: number = 0
+    inflate: number = 0,
+    originX: number = 0,
+    originY: number = 0
   ): void {
+    this.originX = originX;
+    this.originY = originY;
     this.gridWidth = Math.ceil(mapWidth / this.cellSize);
     this.gridHeight = Math.ceil(mapHeight / this.cellSize);
     const totalCells = this.gridWidth * this.gridHeight;
@@ -140,17 +146,17 @@ export default class AStarGrid {
 
     const inflatePixels = inflate;
 
-    // Mark cells overlapping rectangles (inflated)
+    // Mark cells overlapping rectangles (inflated) — shift by origin
     for (const rect of rects) {
-      const minGX = Math.max(0, Math.floor((rect.x - inflatePixels) / this.cellSize));
-      const minGY = Math.max(0, Math.floor((rect.y - inflatePixels) / this.cellSize));
+      const minGX = Math.max(0, Math.floor((rect.x - originX - inflatePixels) / this.cellSize));
+      const minGY = Math.max(0, Math.floor((rect.y - originY - inflatePixels) / this.cellSize));
       const maxGX = Math.min(
         this.gridWidth - 1,
-        Math.floor((rect.x + rect.width + inflatePixels) / this.cellSize)
+        Math.floor((rect.x - originX + rect.width + inflatePixels) / this.cellSize)
       );
       const maxGY = Math.min(
         this.gridHeight - 1,
-        Math.floor((rect.y + rect.height + inflatePixels) / this.cellSize)
+        Math.floor((rect.y - originY + rect.height + inflatePixels) / this.cellSize)
       );
 
       for (let gy = minGY; gy <= maxGY; gy++) {
@@ -178,10 +184,10 @@ export default class AStarGrid {
     endX: number,
     endY: number
   ): Point[] {
-    const sx = Math.floor(startX / this.cellSize);
-    const sy = Math.floor(startY / this.cellSize);
-    let ex = Math.floor(endX / this.cellSize);
-    let ey = Math.floor(endY / this.cellSize);
+    const sx = Math.floor((startX - this.originX) / this.cellSize);
+    const sy = Math.floor((startY - this.originY) / this.cellSize);
+    let ex = Math.floor((endX - this.originX) / this.cellSize);
+    let ey = Math.floor((endY - this.originY) / this.cellSize);
 
     // Clamp to grid bounds
     const clampX = (v: number) => Math.max(0, Math.min(this.gridWidth - 1, v));
@@ -251,8 +257,8 @@ export default class AStarGrid {
 
   private gridToWorld(gx: number, gy: number): Point {
     return {
-      x: gx * this.cellSize + this.cellSize * 0.5,
-      y: gy * this.cellSize + this.cellSize * 0.5,
+      x: gx * this.cellSize + this.cellSize * 0.5 + this.originX,
+      y: gy * this.cellSize + this.cellSize * 0.5 + this.originY,
     };
   }
 
@@ -537,23 +543,23 @@ export default class AStarGrid {
       if (v.y > maxY) maxY = v.y;
     }
 
-    const gMinX = Math.max(0, Math.floor((minX - inflate) / this.cellSize));
-    const gMinY = Math.max(0, Math.floor((minY - inflate) / this.cellSize));
-    const gMaxX = Math.min(this.gridWidth - 1, Math.floor((maxX + inflate) / this.cellSize));
+    const gMinX = Math.max(0, Math.floor((minX - this.originX - inflate) / this.cellSize));
+    const gMinY = Math.max(0, Math.floor((minY - this.originY - inflate) / this.cellSize));
+    const gMaxX = Math.min(this.gridWidth - 1, Math.floor((maxX - this.originX + inflate) / this.cellSize));
     const gMaxY = Math.min(
       this.gridHeight - 1,
-      Math.floor((maxY + inflate) / this.cellSize)
+      Math.floor((maxY - this.originY + inflate) / this.cellSize)
     );
 
     // For each grid cell in the bounding box, check if cell overlaps polygon (with inflation)
     for (let gy = gMinY; gy <= gMaxY; gy++) {
-      const cellCenterY = gy * this.cellSize + this.cellSize * 0.5;
+      const cellCenterY = gy * this.cellSize + this.cellSize * 0.5 + this.originY;
       const rowOffset = gy * this.gridWidth;
 
       for (let gx = gMinX; gx <= gMaxX; gx++) {
         if (this.blocked[rowOffset + gx] === 1) continue;
 
-        const cellCenterX = gx * this.cellSize + this.cellSize * 0.5;
+        const cellCenterX = gx * this.cellSize + this.cellSize * 0.5 + this.originX;
 
         if (
           this.pointInPolygon(cellCenterX, cellCenterY, vertices) ||
