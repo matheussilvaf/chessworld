@@ -1,4 +1,4 @@
-import { Trophy, Crown, Medal, Award } from 'lucide-react';
+import { Trophy, Crown, Medal, Award, Swords } from 'lucide-react';
 import type { TournamentState } from '../../hooks/useTournamentRoom';
 
 interface TournamentStandingsPanelProps {
@@ -57,6 +57,7 @@ export function TournamentStandingsPanel({ state }: TournamentStandingsPanelProp
 
   if (isActive || isCompleted) {
     const standings = state.standings;
+    const pairings = state.pairings;
     const title = isCompleted ? 'Classificação Final' : 'Standings';
 
     return (
@@ -70,9 +71,54 @@ export function TournamentStandingsPanel({ state }: TournamentStandingsPanelProp
             <span className="ml-auto text-xs text-slate-500">R{state.currentRound}/{state.totalRounds}</span>
           )}
         </div>
+
+        {/* Show pairings when round is active */}
+        {isActive && pairings.length > 0 && (
+          <div className="border-b border-slate-700/50">
+            <div className="px-4 py-2 flex items-center gap-1.5">
+              <Swords className="w-3.5 h-3.5 text-sky-400" />
+              <span className="text-xs font-medium text-sky-300 uppercase tracking-wide">
+                Rodada {state.currentRound}
+              </span>
+            </div>
+            <div className="px-2 pb-2 space-y-1">
+              {pairings.map((p) => (
+                <div
+                  key={p.boardNumber}
+                  className="flex items-center gap-1 px-2 py-1.5 rounded bg-slate-800/40"
+                >
+                  <span className="text-[10px] text-slate-600 w-4 text-center font-mono">{p.boardNumber}</span>
+                  {p.isBye ? (
+                    <span className="text-xs text-slate-400 flex-1 text-center italic">
+                      {p.whiteUsername || p.blackUsername} (bye)
+                    </span>
+                  ) : (
+                    <>
+                      <span className="text-xs text-slate-200 flex-1 text-right truncate">
+                        {p.whiteUsername}
+                      </span>
+                      <span className="text-[10px] text-slate-600 px-1">vs</span>
+                      <span className="text-xs text-slate-200 flex-1 text-left truncate">
+                        {p.blackUsername}
+                      </span>
+                      {p.result && (
+                        <span className="text-[10px] text-amber-400 font-mono ml-1 shrink-0">
+                          {p.result}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto">
           {standings.length === 0 ? (
-            <p className="text-xs text-slate-500 text-center py-4">Calculando...</p>
+            <p className="text-xs text-slate-500 text-center py-4">
+              {state.status === 'starting' ? 'Calculando pareamentos...' : 'Aguardando resultados'}
+            </p>
           ) : (
             <div className="divide-y divide-slate-800/50">
               {standings.map((s) => (

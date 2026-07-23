@@ -233,7 +233,7 @@ export class ChessOverlayManager {
       overlay.container.destroy();
       this.overlays.delete(tableId);
     }
-    this.tables.delete(tableId);
+    this.configs.delete(tableId);
   }
 
   setActiveTable(tableId: string) {

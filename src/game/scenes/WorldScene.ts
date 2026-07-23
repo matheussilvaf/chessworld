@@ -1974,7 +1974,7 @@ export class WorldScene extends Phaser.Scene {
       for (const runtimeId of tableAnchors.keys()) {
         this.tableRegistry.tables.delete(runtimeId);
         if (this.chessOverlay) {
-          this.chessOverlay.unregisterTable(runtimeId);
+          try { this.chessOverlay.unregisterTable(runtimeId); } catch { /* already removed */ }
         }
       }
       this.arenaManager.removeAll();

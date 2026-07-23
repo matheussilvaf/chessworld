@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useAuthStore } from '../stores/authStore';
-import { getWorldRoom } from '../game/network/colyseusClient';
+import { getActiveRoom } from '../game/network/colyseusClient';
 import type { TournamentState } from './useTournamentRoom';
 
 export function useTournamentAutoSeat(
@@ -24,7 +24,7 @@ export function useTournamentAutoSeat(
     if (state.pairings.length === 0) return;
     if (state.modules.length === 0) return;
 
-    const room = getWorldRoom();
+    const room = getActiveRoom();
     if (!room) return;
 
     const myPairing = state.pairings.find(
