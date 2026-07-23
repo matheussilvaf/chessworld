@@ -22,6 +22,7 @@ export interface TournamentState {
   modules: Array<{ instanceId: string; moduleType: string; order: number }>;
   tables: Array<{ runtimeTableId: string; tableNumber: number; moduleInstanceId: string; localSlotId: string }>;
   pairings: Array<{
+    roundNumber: number;
     boardNumber: number;
     whitePlayerId: string;
     blackPlayerId: string;
@@ -34,6 +35,8 @@ export interface TournamentState {
     isBye: boolean;
     byePlayerId: string;
     presenceDeadline: string;
+    startedAt: string;
+    completedAt: string;
   }>;
   registrations: Array<{ playerId: string; username: string; rating: number }>;
   standings: Array<{
@@ -121,6 +124,7 @@ export function useTournamentRoom() {
         if (newState.pairings) {
           newState.pairings.forEach((p: any) => {
             pairings.push({
+              roundNumber: p.roundNumber,
               boardNumber: p.boardNumber,
               whitePlayerId: p.whitePlayerId,
               blackPlayerId: p.blackPlayerId,
@@ -133,6 +137,8 @@ export function useTournamentRoom() {
               isBye: p.isBye,
               byePlayerId: p.byePlayerId,
               presenceDeadline: p.presenceDeadline,
+              startedAt: p.startedAt,
+              completedAt: p.completedAt,
             });
           });
         }

@@ -775,23 +775,41 @@ async function saveStandings(instanceId: string, swissId: string): Promise<void>
 
   const histories = computeAllHistories(swissT);
 
-  await db
-    .from('tournament_standings')
-    .delete()
+  const { data: regs } = await db
+    .from('tournament_registrations')
+    .select('player_id, username')
     .eq('tournament_id', instanceId);
+
+  const usernameToUuid = new Map<string, string>();
+  if (regs) {
+    for (const r of regs) {
+      usernameToUuid.set(r.username, r.player_id);
+    }
+  }
 
   const rows = swissT.standings.map((s, i) => {
     const history = histories.get(s.tpn);
+    const realPlayerId = usernameToUuid.get(s.name) || s.playerId;
+
+    let wins = 0;
+    let draws = 0;
+    let losses = 0;
+    if (history) {
+      wins = history.wins + history.winsByForfeit;
+      draws = history.draws;
+      losses = history.losses + history.lossesByForfeit + history.doubleAbsences;
+    }
+
     return {
       tournament_id: instanceId,
-      player_id: s.playerId,
+      player_id: realPlayerId,
       username: s.name,
       rating: s.rating,
       position: s.position,
       points: s.points,
-      wins: history?.wins ?? s.tiebreak.winsPlayed,
-      draws: history?.draws ?? 0,
-      losses: history?.losses ?? 0,
+      wins,
+      draws,
+      losses,
       buchholz: s.tiebreak.buchholz,
       buchholz_cut1: s.tiebreak.buchholzCut1,
       sonneborn_berger: s.tiebreak.sonnebornBerger,
@@ -800,8 +818,20 @@ async function saveStandings(instanceId: string, swissId: string): Promise<void>
     };
   });
 
+  const { error: deleteError } = await db
+    .from('tournament_standings')
+    .delete()
+    .eq('tournament_id', instanceId);
+
+  if (deleteError) {
+    console.error('[Coordinator] saveStandings delete error:', deleteError.message);
+  }
+
   if (rows.length > 0) {
-    await db.from('tournament_standings').insert(rows);
+    const { error: insertError } = await db.from('tournament_standings').insert(rows);
+    if (insertError) {
+      console.error('[Coordinator] saveStandings insert error:', insertError.message);
+    }
   }
 }
 
@@ -930,7 +960,21 @@ export async function getLatestCompletedInstance(): Promise<TournamentInstance |
   const { data } = await db
     .from('tournament_instances')
     .select('*')
-    .in('status', ['completed', 'cancelled_insufficient_players'])
+    .eq('status', 'completed')
+    .order('completed_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!data) return null;
+  return mapInstance(data);
+}
+
+export async function getLatestCancelledInstance(): Promise<TournamentInstance | null> {
+  const db = getClient();
+  const { data } = await db
+    .from('tournament_instances')
+    .select('*')
+    .eq('status', 'cancelled_insufficient_players')
     .order('completed_at', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -1009,15 +1053,22 @@ export async function unregisterPlayer(tournamentId: string, playerId: string): 
   return { success: true };
 }
 
-export async function getPairings(tournamentId: string, roundNumber: number): Promise<PairingRecord[]> {
+export async function getPairings(tournamentId: string, roundNumber?: number): Promise<PairingRecord[]> {
   const db = getClient();
-  const { data } = await db
+  let query = db
     .from('tournament_pairings')
     .select('*')
-    .eq('tournament_id', tournamentId)
-    .eq('round_number', roundNumber)
+    .eq('tournament_id', tournamentId);
+
+  if (roundNumber !== undefined) {
+    query = query.eq('round_number', roundNumber);
+  }
+
+  query = query
+    .order('round_number', { ascending: true })
     .order('board_number', { ascending: true });
 
+  const { data } = await query;
   return (data || []).map(mapPairing);
 }
 
@@ -1114,13 +1165,17 @@ function mapPairing(row: any): PairingRecord {
   };
 }
 
-export async function clearPresenceDeadline(tournamentId: string, runtimeTableId: string): Promise<void> {
+export async function markPairingStarted(tournamentId: string, runtimeTableId: string): Promise<void> {
   const db = getClient();
   await db
     .from('tournament_pairings')
-    .update({ presence_deadline: null })
+    .update({
+      started_at: new Date().toISOString(),
+      presence_deadline: null,
+    })
     .eq('tournament_id', tournamentId)
     .eq('runtime_table_id', runtimeTableId)
+    .is('started_at', null)
     .is('result', null);
 }
 

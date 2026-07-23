@@ -31,6 +31,7 @@ defineTypes(TableState, {
 });
 
 export class PairingState extends Schema {
+  roundNumber: number = 0;
   boardNumber: number = 0;
   whitePlayerId: string = '';
   blackPlayerId: string = '';
@@ -43,8 +44,11 @@ export class PairingState extends Schema {
   isBye: boolean = false;
   byePlayerId: string = '';
   presenceDeadline: string = '';
+  startedAt: string = '';
+  completedAt: string = '';
 }
 defineTypes(PairingState, {
+  roundNumber: 'number',
   boardNumber: 'number',
   whitePlayerId: 'string',
   blackPlayerId: 'string',
@@ -57,6 +61,8 @@ defineTypes(PairingState, {
   isBye: 'boolean',
   byePlayerId: 'string',
   presenceDeadline: 'string',
+  startedAt: 'string',
+  completedAt: 'string',
 });
 
 export class RegistrationState extends Schema {
@@ -243,9 +249,8 @@ export class TournamentRoom extends Room<TournamentArenaState> {
 
   private async syncState(): Promise<void> {
     try {
-      const [current, lastCompleted, config] = await Promise.all([
+      const [current, config] = await Promise.all([
         coordinator.getCurrentInstance(),
-        coordinator.getLatestCompletedInstance(),
         coordinator.loadConfig(),
       ]);
 
@@ -279,7 +284,7 @@ export class TournamentRoom extends Room<TournamentArenaState> {
         this.syncRegistrations(regs);
 
         if (current.currentRound > 0) {
-          const pairings = await coordinator.getPairings(current.id, current.currentRound);
+          const pairings = await coordinator.getPairings(current.id);
           this.syncPairings(pairings);
         } else {
           this.state.pairings.clear();
@@ -288,12 +293,17 @@ export class TournamentRoom extends Room<TournamentArenaState> {
         if (current.status !== 'registration_open') {
           const standings = await coordinator.getStandings(current.id);
           this.syncStandings(standings);
-        } else if (lastCompleted && lastCompleted.status === 'completed') {
-          const standings = await coordinator.getStandings(lastCompleted.id);
-          this.syncStandings(standings);
-          this.state.lastStatus = 'completed';
+          this.state.lastStatus = '';
         } else {
-          this.state.standings.clear();
+          const lastCompleted = await coordinator.getLatestCompletedInstance();
+          if (lastCompleted) {
+            const standings = await coordinator.getStandings(lastCompleted.id);
+            this.syncStandings(standings);
+            this.state.lastStatus = 'completed';
+          } else {
+            this.state.standings.clear();
+            this.state.lastStatus = '';
+          }
         }
       } else {
         this.state.status = 'idle';
@@ -305,12 +315,27 @@ export class TournamentRoom extends Room<TournamentArenaState> {
         this.state.doorOpen = false;
         this.state.practiceTablesLocked = false;
 
-        if (lastCompleted && lastCompleted.status === 'completed') {
-          this.state.lastStatus = 'completed';
+        const lastCompleted = await coordinator.getLatestCompletedInstance();
+        const lastCancelled = await coordinator.getLatestCancelledInstance();
+
+        if (lastCompleted) {
+          const cancelledIsNewer = lastCancelled &&
+            lastCancelled.completedAt && lastCompleted.completedAt &&
+            new Date(lastCancelled.completedAt) > new Date(lastCompleted.completedAt);
+
+          if (cancelledIsNewer) {
+            this.state.lastStatus = 'cancelled_insufficient_players';
+          } else {
+            this.state.lastStatus = 'completed';
+          }
+
           const standings = await coordinator.getStandings(lastCompleted.id);
           this.syncStandings(standings);
-        } else if (lastCompleted && lastCompleted.status === 'cancelled_insufficient_players') {
+        } else if (lastCancelled) {
           this.state.lastStatus = 'cancelled_insufficient_players';
+          this.state.standings.clear();
+        } else {
+          this.state.lastStatus = '';
           this.state.standings.clear();
         }
       }
@@ -359,6 +384,7 @@ export class TournamentRoom extends Room<TournamentArenaState> {
     this.state.pairings.clear();
     for (const p of pairings) {
       const ps = new PairingState();
+      ps.roundNumber = p.roundNumber;
       ps.boardNumber = p.boardNumber;
       ps.whitePlayerId = p.whitePlayerId || '';
       ps.blackPlayerId = p.blackPlayerId || '';
@@ -371,6 +397,8 @@ export class TournamentRoom extends Room<TournamentArenaState> {
       ps.isBye = p.isBye;
       ps.byePlayerId = p.byePlayerId || '';
       ps.presenceDeadline = p.presenceDeadline || '';
+      ps.startedAt = p.startedAt || '';
+      ps.completedAt = p.completedAt || '';
       this.state.pairings.push(ps);
     }
   }

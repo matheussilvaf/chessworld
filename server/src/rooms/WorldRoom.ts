@@ -712,7 +712,7 @@ export class WorldRoom extends Room<WorldState> {
     // Clear presence deadline for this board's tournament pairing
     coordinator.getCurrentInstance().then(instance => {
       if (instance && instance.id) {
-        coordinator.clearPresenceDeadline(instance.id, board.id);
+        coordinator.markPairingStarted(instance.id, board.id);
       }
     }).catch(() => {});
 

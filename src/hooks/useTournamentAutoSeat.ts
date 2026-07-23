@@ -27,7 +27,7 @@ export function useTournamentAutoSeat(
     if (!room) return;
 
     const myPairing = state.pairings.find(
-      p => p.whitePlayerId === user.id || p.blackPlayerId === user.id
+      p => p.roundNumber === state.currentRound && (p.whitePlayerId === user.id || p.blackPlayerId === user.id)
     );
     if (!myPairing) return;
     if (myPairing.isBye) {
