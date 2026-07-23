@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as service from './service.js';
+import { computeAllHistories } from './tiebreaks.js';
 import type { Tournament, GameResult, RoundMode, Color } from './types.js';
 import { getEngineStatus } from './engine.js';
 
@@ -10,6 +11,15 @@ export function setTournamentRoomInstance(room: { isPlayerPresent(playerId: stri
 }
 function getTournamentRoomInstance() {
   return tournamentRoomInstance;
+}
+
+// Reference to WorldRoom for checking if match is already active
+let worldRoomInstance: { isBoardPlaying(boardId: string): boolean } | null = null;
+export function setWorldRoomInstance(room: { isBoardPlaying(boardId: string): boolean } | null) {
+  worldRoomInstance = room;
+}
+function getWorldRoomInstance() {
+  return worldRoomInstance;
 }
 
 export interface TournamentConfig {
@@ -391,6 +401,17 @@ async function checkPresenceDeadlines(instance: TournamentInstance): Promise<voi
   for (const p of expired) {
     if (p.is_bye || p.result) continue;
 
+    // If the match is already playing on the WorldRoom board, clear deadline instead of forfeiting
+    const worldRoom = getWorldRoomInstance();
+    if (worldRoom && p.runtime_table_id && worldRoom.isBoardPlaying(p.runtime_table_id)) {
+      await db
+        .from('tournament_pairings')
+        .update({ presence_deadline: null })
+        .eq('id', p.id)
+        .is('result', null);
+      continue;
+    }
+
     let result: string;
     let reason: string;
 
@@ -581,7 +602,7 @@ async function createRoundRecords(
   }
 
   const now = new Date();
-  const presenceDeadline = new Date(now.getTime() + 60_000).toISOString();
+  const presenceDeadline = new Date(now.getTime() + 120_000).toISOString();
 
   for (const pairing of round.pairings) {
     const white = playerMap.get(pairing.whiteTpn);
@@ -652,27 +673,32 @@ async function saveStandings(instanceId: string, swissId: string): Promise<void>
   const swissT = await service.getTournament(swissId);
   if (!swissT || swissT.standings.length === 0) return;
 
+  const histories = computeAllHistories(swissT);
+
   await db
     .from('tournament_standings')
     .delete()
     .eq('tournament_id', instanceId);
 
-  const rows = swissT.standings.map((s, i) => ({
-    tournament_id: instanceId,
-    player_id: s.playerId,
-    username: s.name,
-    rating: s.rating,
-    position: s.position,
-    points: s.points,
-    wins: s.tiebreak.winsPlayed,
-    draws: 0,
-    losses: 0,
-    buchholz: s.tiebreak.buchholz,
-    buchholz_cut1: s.tiebreak.buchholzCut1,
-    sonneborn_berger: s.tiebreak.sonnebornBerger,
-    progressive: s.tiebreak.progressiveScore,
-    is_champion: i === 0,
-  }));
+  const rows = swissT.standings.map((s, i) => {
+    const history = histories.get(s.tpn);
+    return {
+      tournament_id: instanceId,
+      player_id: s.playerId,
+      username: s.name,
+      rating: s.rating,
+      position: s.position,
+      points: s.points,
+      wins: history?.wins ?? s.tiebreak.winsPlayed,
+      draws: history?.draws ?? 0,
+      losses: history?.losses ?? 0,
+      buchholz: s.tiebreak.buchholz,
+      buchholz_cut1: s.tiebreak.buchholzCut1,
+      sonneborn_berger: s.tiebreak.sonnebornBerger,
+      progressive: s.tiebreak.progressiveScore,
+      is_champion: i === 0,
+    };
+  });
 
   if (rows.length > 0) {
     await db.from('tournament_standings').insert(rows);
@@ -980,4 +1006,32 @@ function mapPairing(row: any): PairingRecord {
     completedAt: row.completed_at,
     presenceDeadline: row.presence_deadline,
   };
+}
+
+export async function clearPresenceDeadline(tournamentId: string, runtimeTableId: string): Promise<void> {
+  const db = getClient();
+  await db
+    .from('tournament_pairings')
+    .update({ presence_deadline: null })
+    .eq('tournament_id', tournamentId)
+    .eq('runtime_table_id', runtimeTableId)
+    .is('result', null);
+}
+
+export async function updateProfileStats(whitePlayerId: string, blackPlayerId: string, result: string): Promise<void> {
+  const db = getClient();
+  try {
+    if (result === '1-0') {
+      await db.rpc('increment_profile_stats', { p_user_id: whitePlayerId, p_is_win: true, p_is_draw: false });
+      await db.rpc('increment_profile_stats', { p_user_id: blackPlayerId, p_is_win: false, p_is_draw: false });
+    } else if (result === '0-1') {
+      await db.rpc('increment_profile_stats', { p_user_id: blackPlayerId, p_is_win: true, p_is_draw: false });
+      await db.rpc('increment_profile_stats', { p_user_id: whitePlayerId, p_is_win: false, p_is_draw: false });
+    } else if (result === '1/2-1/2') {
+      await db.rpc('increment_profile_stats', { p_user_id: whitePlayerId, p_is_win: false, p_is_draw: true });
+      await db.rpc('increment_profile_stats', { p_user_id: blackPlayerId, p_is_win: false, p_is_draw: true });
+    }
+  } catch (err: any) {
+    console.error('[Coordinator] updateProfileStats error:', err.message);
+  }
 }

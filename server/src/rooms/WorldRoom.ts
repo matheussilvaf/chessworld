@@ -27,6 +27,8 @@ export class WorldRoom extends Room<WorldState> {
     this.setSimulationInterval(() => this.tick(), 1000 / this.TICK_RATE);
     this.maxClients = 100;
 
+    coordinator.setWorldRoomInstance(this);
+
     console.log(`[WorldRoom] Created for region: ${options.region || 'unknown'} | roomId: ${this.roomId}`);
 
     this.onMessage('move_to', (client, data) => {
@@ -483,6 +485,17 @@ export class WorldRoom extends Room<WorldState> {
 
   onDispose() {
     activeGames.clear();
+    coordinator.setWorldRoomInstance(null);
+  }
+
+  isBoardPlaying(boardId: string): boolean {
+    let playing = false;
+    this.state.matches.forEach((match) => {
+      if (match.boardId === boardId && match.status === 'playing') {
+        playing = true;
+      }
+    });
+    return playing;
   }
 
   private tick() {
@@ -592,6 +605,11 @@ export class WorldRoom extends Room<WorldState> {
 
       const reported = await coordinator.reportMatchResult(instance.id, instance.currentRound, pairing.boardNumber, result, match.result || 'normal');
       console.log(`[WorldRoom] Tournament result reported: board ${pairing.boardNumber} = ${result} (${match.result}), success=${reported}`);
+
+      // Update player profile stats (wins/losses/draws/rating)
+      if (reported && pairing.whitePlayerId && pairing.blackPlayerId) {
+        await coordinator.updateProfileStats(pairing.whitePlayerId, pairing.blackPlayerId, result);
+      }
     } catch (err: any) {
       console.error(`[WorldRoom] Failed to report tournament result:`, err.message);
     }
@@ -674,6 +692,13 @@ export class WorldRoom extends Room<WorldState> {
       }
     }
     joiningClient.send('match_started', { matchId, boardId: board.id, color: joinerColor });
+
+    // Clear presence deadline for this board's tournament pairing
+    coordinator.getCurrentInstance().then(instance => {
+      if (instance && instance.id) {
+        coordinator.clearPresenceDeadline(instance.id, board.id);
+      }
+    }).catch(() => {});
 
     console.log(`[WorldRoom] Match started: ${matchId} (${whitePlayerName} vs ${blackPlayerName}) on ${board.name}`);
   }

@@ -2045,6 +2045,14 @@ export class WorldScene extends Phaser.Scene {
   }
 
   public removeArenaModules() {
+    // If player is in the arena area (negative Y), teleport them back to reception first
+    if (this.player && this.playerBody) {
+      const playerY = this.playerBody.position.y;
+      if (playerY < 0) {
+        this.unseatPlayerToReception();
+      }
+    }
+
     if (this.arenaManager) {
       const tableAnchors = this.arenaManager.getTableAnchors();
       for (const runtimeId of tableAnchors.keys()) {
