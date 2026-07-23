@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Users, Clock, Swords, Timer, CheckCircle, X, Loader2 } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
 import type { TournamentState } from '../../hooks/useTournamentRoom';
 
 interface TournamentRegistryPanelProps {
@@ -58,7 +59,6 @@ export function TournamentRegistryPanel({ state, userId, onRegister, onUnregiste
 
   const handleRegister = useCallback(async () => {
     setRegistering(true);
-    const { supabase } = await import('../../lib/supabase');
     const { data } = await supabase.auth.getUser();
     const user = data.user;
     if (!user) { setRegistering(false); return; }

@@ -14,6 +14,7 @@ import { SettingsModal } from './components/game/SettingsModal';
 import { VoiceChatPanel } from './components/game/VoiceChatPanel';
 
 import { TableWaitingOverlays } from './components/game/TableWaitingOverlays';
+import { TournamentPanelOverlays } from './components/game/TournamentPanelOverlays';
 import { InteractionDebugModal } from './components/game/InteractionDebugModal';
 import { MatchHUD } from './components/game/MatchHUD';
 import { ChessBoardOverlay } from './components/chess/ChessBoardOverlay';
@@ -81,6 +82,7 @@ function GameScene() {
       <MatchHUD />
       <ChessBoardOverlay />
       <TableWaitingOverlays />
+      <TournamentPanelOverlays />
     </div>
   );
 }

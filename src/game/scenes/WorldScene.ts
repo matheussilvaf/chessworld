@@ -123,6 +123,7 @@ export class WorldScene extends Phaser.Scene {
 
   private interactionSystem!: InteractionSystem;
   private tableRegistry: TableRegistry | null = null;
+  private tournamentPanelAnchors: { registry: { x: number; y: number; width: number; height: number } | null; standings: { x: number; y: number; width: number; height: number } | null } = { registry: null, standings: null };
   private currentSeatInfo: { tableId: string; role: 'player' | 'spectator'; seat: string } | null = null;
   private seatTween: Phaser.Tweens.Tween | null = null;
   private savedCollisionFilter: any = null;
@@ -360,6 +361,7 @@ export class WorldScene extends Phaser.Scene {
     // Publish active table screen rect for HTML overlay
     this.publishOverlayRect();
     this.publishTableScreenRects();
+    this.publishTournamentPanelRects();
 
     // Snap remote players to integer positions too
     this.otherPlayers.forEach((remote) => {
@@ -1437,6 +1439,46 @@ export class WorldScene extends Phaser.Scene {
     };
   }
 
+  private publishTournamentPanelRects() {
+    if (!this.tournamentPanelAnchors.registry && !this.tournamentPanelAnchors.standings) {
+      (window as any).__tournamentPanelRects = null;
+      return;
+    }
+    const cam = this.cameras.main;
+    const canvasEl = this.game.canvas;
+    const canvasRect = canvasEl.getBoundingClientRect();
+    const scaleX = canvasRect.width / canvasEl.width;
+    const scaleY = canvasRect.height / canvasEl.height;
+    const cx = cam.scrollX + cam.width * 0.5;
+    const cy = cam.scrollY + cam.height * 0.5;
+    const cos = Math.cos(-this.currentCameraRotation);
+    const sin = Math.sin(-this.currentCameraRotation);
+    const zoom = cam.zoom;
+    const toScreen = (wx: number, wy: number) => {
+      const dx = wx - cx;
+      const dy = wy - cy;
+      const rx = dx * cos - dy * sin;
+      const ry = dx * sin + dy * cos;
+      return {
+        x: (rx * zoom + cam.width * 0.5) * scaleX + canvasRect.left,
+        y: (ry * zoom + cam.height * 0.5) * scaleY + canvasRect.top,
+      };
+    };
+    const result: Record<string, { x: number; y: number; width: number; height: number }> = {};
+    for (const [key, anchor] of Object.entries(this.tournamentPanelAnchors)) {
+      if (!anchor) continue;
+      const tl = toScreen(anchor.x, anchor.y);
+      const br = toScreen(anchor.x + anchor.width, anchor.y + anchor.height);
+      result[key] = {
+        x: Math.min(tl.x, br.x),
+        y: Math.min(tl.y, br.y),
+        width: Math.abs(br.x - tl.x),
+        height: Math.abs(br.y - tl.y),
+      };
+    }
+    (window as any).__tournamentPanelRects = result;
+  }
+
   private publishTableScreenRects() {
     if (!this.chessOverlay || !this.tableRegistry) return;
     const cam = this.cameras.main;
@@ -1566,6 +1608,24 @@ export class WorldScene extends Phaser.Scene {
 
     this.tableRegistry = loadTableRegistry(tmjData);
     console.log('[WorldScene] Table registry loaded:', this.tableRegistry.tables.size, 'tables');
+
+    // Extract tournament panel anchors from ui_anchors layer
+    this.tournamentPanelAnchors = { registry: null, standings: null };
+    const findUiAnchors = (layers: any[]): void => {
+      for (const l of layers) {
+        if (l.type === 'group') findUiAnchors(l.layers || []);
+        else if (l.type === 'objectgroup' && l.name === 'ui_anchors') {
+          for (const obj of l.objects || []) {
+            if (obj.name === 'tournament_registry_anchor') {
+              this.tournamentPanelAnchors.registry = { x: obj.x, y: obj.y, width: obj.width, height: obj.height };
+            } else if (obj.name === 'tournament_standings_anchor') {
+              this.tournamentPanelAnchors.standings = { x: obj.x, y: obj.y, width: obj.width, height: obj.height };
+            }
+          }
+        }
+      }
+    };
+    findUiAnchors(tmjData.layers || []);
 
     // Initialize chess overlay manager and register all tables
     this.chessOverlay = new ChessOverlayManager(this);
@@ -1825,6 +1885,8 @@ export class WorldScene extends Phaser.Scene {
 
     // Clear table registry
     this.tableRegistry = null as any;
+    this.tournamentPanelAnchors = { registry: null, standings: null };
+    (window as any).__tournamentPanelRects = null;
 
     // Destroy tilemap
     if (this.currentTilemap) {
