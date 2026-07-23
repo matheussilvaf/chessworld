@@ -185,7 +185,7 @@ function StandingsList({ standings }: { standings: TournamentState['standings'] 
       {standings.map((s) => (
         <div
           key={s.playerId}
-          className={`flex items-center gap-2 px-3 py-2 ${
+          className={`flex items-center gap-2 px-3 py-2 min-w-0 ${
             s.isChampion ? 'bg-amber-500/5' : 'hover:bg-slate-800/30'
           }`}
         >
@@ -207,7 +207,7 @@ function StandingsList({ standings }: { standings: TournamentState['standings'] 
             <span className="text-sm font-medium text-white font-mono w-8 text-right">
               {s.points}
             </span>
-            <span className="text-[10px] text-slate-500 font-mono w-16 text-right hidden sm:block">
+            <span className="text-[10px] text-slate-500 font-mono w-16 text-right">
               {s.wins}W {s.draws}D {s.losses}L
             </span>
           </div>

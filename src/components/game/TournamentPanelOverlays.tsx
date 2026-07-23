@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, ReactNode } from 'react';
 import { useTournamentRoom } from '../../hooks/useTournamentRoom';
 import { useTournamentAutoSeat } from '../../hooks/useTournamentAutoSeat';
 import { TournamentRegistryPanel } from '../tournament/TournamentRegistryPanel';
@@ -12,6 +12,69 @@ interface PanelRect {
   height: number;
 }
 
+const RECT_TOLERANCE = 0.25;
+
+function rectsEqual(a: PanelRect | undefined, b: PanelRect | undefined): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return (
+    Math.abs(a.x - b.x) < RECT_TOLERANCE &&
+    Math.abs(a.y - b.y) < RECT_TOLERANCE &&
+    Math.abs(a.width - b.width) < RECT_TOLERANCE &&
+    Math.abs(a.height - b.height) < RECT_TOLERANCE
+  );
+}
+
+interface ScaledAnchorPanelProps {
+  rect: PanelRect;
+  baseWidth: number;
+  baseHeight: number;
+  children: ReactNode;
+}
+
+function ScaledAnchorPanel({ rect, baseWidth, baseHeight, children }: ScaledAnchorPanelProps) {
+  const scaleX = rect.width / baseWidth;
+  const scaleY = rect.height / baseHeight;
+  const scale = Math.min(scaleX, scaleY);
+
+  const scaledW = baseWidth * scale;
+  const scaledH = baseHeight * scale;
+  const offsetX = (rect.width - scaledW) / 2;
+  const offsetY = (rect.height - scaledH) / 2;
+
+  return (
+    <div
+      className="fixed z-[600] overflow-hidden"
+      style={{
+        left: rect.x,
+        top: rect.y,
+        width: rect.width,
+        height: rect.height,
+      }}
+    >
+      <div
+        className="rounded-lg border border-slate-700/80 bg-slate-900/95 backdrop-blur-sm shadow-xl shadow-black/40"
+        style={{
+          position: 'absolute',
+          left: offsetX,
+          top: offsetY,
+          width: baseWidth,
+          height: baseHeight,
+          transform: `scale(${scale})`,
+          transformOrigin: 'top left',
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const REGISTRY_BASE_WIDTH = 240;
+const REGISTRY_BASE_HEIGHT = 320;
+const STANDINGS_BASE_WIDTH = 280;
+const STANDINGS_BASE_HEIGHT = 380;
+
 export function TournamentPanelOverlays() {
   const { user } = useAuthStore();
   const { state, connected, connect, register, unregister, reportResult } = useTournamentRoom();
@@ -19,23 +82,38 @@ export function TournamentPanelOverlays() {
   const [inReception, setInReception] = useState(false);
   const prevDoorOpen = useRef(false);
   const prevModules = useRef<string>('');
+  const prevRegistry = useRef<PanelRect | undefined>(undefined);
+  const prevStandings = useRef<PanelRect | undefined>(undefined);
 
   useEffect(() => {
     let frameId: number;
     const poll = () => {
       const rects = (window as any).__tournamentPanelRects;
       if (rects && (rects.registry || rects.standings)) {
-        setPanelRects({ ...rects });
-        setInReception(true);
+        const newRegistry = rects.registry as PanelRect | undefined;
+        const newStandings = rects.standings as PanelRect | undefined;
+        if (
+          !rectsEqual(newRegistry, prevRegistry.current) ||
+          !rectsEqual(newStandings, prevStandings.current)
+        ) {
+          prevRegistry.current = newRegistry;
+          prevStandings.current = newStandings;
+          setPanelRects({ registry: newRegistry, standings: newStandings });
+        }
+        if (!inReception) setInReception(true);
       } else {
-        setPanelRects(null);
-        setInReception(false);
+        if (prevRegistry.current || prevStandings.current) {
+          prevRegistry.current = undefined;
+          prevStandings.current = undefined;
+          setPanelRects(null);
+        }
+        if (inReception) setInReception(false);
       }
       frameId = requestAnimationFrame(poll);
     };
     frameId = requestAnimationFrame(poll);
     return () => cancelAnimationFrame(frameId);
-  }, []);
+  }, [inReception]);
 
   useEffect(() => {
     if (inReception && user && !connected) {
@@ -43,13 +121,11 @@ export function TournamentPanelOverlays() {
     }
   }, [inReception, user, connected, connect]);
 
-  // React to tournament state changes - load/unload arena modules
   useEffect(() => {
     if (!inReception || !connected) return;
     const scene = (window as any).__worldScene;
     if (!scene) return;
 
-    // Door state
     const shouldOpenDoor = state.doorOpen;
     if (shouldOpenDoor !== prevDoorOpen.current) {
       prevDoorOpen.current = shouldOpenDoor;
@@ -58,7 +134,6 @@ export function TournamentPanelOverlays() {
       }
     }
 
-    // Arena modules
     const modulesKey = JSON.stringify(state.modules);
     if (modulesKey !== prevModules.current && state.modules.length > 0) {
       prevModules.current = modulesKey;
@@ -71,7 +146,6 @@ export function TournamentPanelOverlays() {
       }
     }
 
-    // Remove modules when tournament ends
     if (state.status === 'idle' || state.status === 'registration_open') {
       if (prevModules.current !== '[]' && prevModules.current !== '') {
         prevModules.current = '[]';
@@ -82,7 +156,6 @@ export function TournamentPanelOverlays() {
     }
   }, [state.doorOpen, state.modules, state.status, inReception, connected]);
 
-  // Auto-seat when pairing arrives
   useTournamentAutoSeat(state, connected, reportResult);
 
   if (!panelRects || !connected) return null;
@@ -93,15 +166,11 @@ export function TournamentPanelOverlays() {
 
   return (
     <>
-      {registryRect && registryRect.width > 30 && (
-        <div
-          className="fixed z-[600] overflow-hidden rounded-lg border border-slate-700/80 bg-slate-900/95 backdrop-blur-sm shadow-xl shadow-black/40"
-          style={{
-            left: registryRect.x,
-            top: registryRect.y,
-            width: registryRect.width,
-            height: registryRect.height,
-          }}
+      {registryRect && registryRect.width > 20 && registryRect.height > 20 && (
+        <ScaledAnchorPanel
+          rect={registryRect}
+          baseWidth={REGISTRY_BASE_WIDTH}
+          baseHeight={REGISTRY_BASE_HEIGHT}
         >
           <TournamentRegistryPanel
             state={state}
@@ -109,20 +178,16 @@ export function TournamentPanelOverlays() {
             onRegister={register}
             onUnregister={unregister}
           />
-        </div>
+        </ScaledAnchorPanel>
       )}
-      {standingsRect && standingsRect.width > 30 && (
-        <div
-          className="fixed z-[600] overflow-hidden rounded-lg border border-slate-700/80 bg-slate-900/95 backdrop-blur-sm shadow-xl shadow-black/40"
-          style={{
-            left: standingsRect.x,
-            top: standingsRect.y,
-            width: standingsRect.width,
-            height: standingsRect.height,
-          }}
+      {standingsRect && standingsRect.width > 20 && standingsRect.height > 20 && (
+        <ScaledAnchorPanel
+          rect={standingsRect}
+          baseWidth={STANDINGS_BASE_WIDTH}
+          baseHeight={STANDINGS_BASE_HEIGHT}
         >
           <TournamentStandingsPanel state={state} />
-        </div>
+        </ScaledAnchorPanel>
       )}
     </>
   );
