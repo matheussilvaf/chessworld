@@ -63,7 +63,11 @@ export function TournamentPanelOverlays() {
     if (modulesKey !== prevModules.current && state.modules.length > 0) {
       prevModules.current = modulesKey;
       if (typeof scene.loadArenaModules === 'function') {
-        scene.loadArenaModules(state.modules, state.tables);
+        try {
+          scene.loadArenaModules(state.modules, state.tables);
+        } catch (err) {
+          console.error('[TournamentPanelOverlays] loadArenaModules error:', err);
+        }
       }
     }
 

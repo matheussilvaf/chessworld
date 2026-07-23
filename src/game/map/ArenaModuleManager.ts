@@ -1,5 +1,5 @@
-import { ALL_TILESETS, findTilesetForGidInMap, getTextureKeyForTileset, type TilesetEntry } from '../config/worldAssets';
-import { MAP_CONFIG } from '../config/mapConfig';
+import Phaser from 'phaser';
+import { ALL_TILESETS, findTilesetForGidInMap, getTextureKeyForTileset } from '../config/worldAssets';
 
 export interface ModuleConfig {
   instanceId: string;
@@ -251,10 +251,6 @@ export class ArenaModuleManager {
         layer.setPosition(offsetX, offsetY);
         layer.setDepth(lname.includes('above') ? 200 : 0);
         (layer as any).setCullPadding?.(2, 2);
-        const texture = layer.tileset?.[0]?.image;
-        if (texture) {
-          this.scene.textures.get(texture.key || '')?.setFilter(Phaser.Textures.FilterMode.NEAREST);
-        }
         modInstance.layers.push(layer);
       }
     }
