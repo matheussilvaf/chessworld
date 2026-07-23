@@ -1085,31 +1085,66 @@ export async function reportMatchResultByRuntimeTableId(
 ): Promise<PendingPairing | null> {
   const db = getClient();
 
-  const { data: row } = await db
+  const { data: row, error: fetchError } = await db
     .from('tournament_pairings')
-    .select('tournament_id, round_number, board_number, white_player_id, black_player_id')
+    .select('id, tournament_id, round_number, board_number, white_player_id, black_player_id, result, is_bye')
     .eq('runtime_table_id', runtimeTableId)
-    .is('result', null)
-    .eq('is_bye', false)
+    .order('round_number', { ascending: false })
+    .limit(1)
     .maybeSingle();
 
-  if (!row) return null;
+  if (fetchError) {
+    throw new Error(`[Coordinator] Failed to fetch pairing for runtimeTableId=${runtimeTableId}: ${fetchError.message}`);
+  }
+  if (!row) {
+    throw new Error(`[Coordinator] No pairing found for runtimeTableId=${runtimeTableId}`);
+  }
+  if (row.is_bye) {
+    throw new Error(`[Coordinator] Pairing ${row.id} is a bye but has runtime_table_id=${runtimeTableId}`);
+  }
 
-  const updated = await reportMatchResult(
-    row.tournament_id,
-    row.round_number,
-    row.board_number,
-    result,
-    reason,
-  );
+  if (row.result) {
+    if (row.result === result) {
+      return {
+        tournamentId: row.tournament_id,
+        roundNumber: row.round_number,
+        boardNumber: row.board_number,
+        whitePlayerId: row.white_player_id,
+        blackPlayerId: row.black_player_id,
+        updated: false,
+      };
+    }
+    throw new Error(`[Coordinator] Result conflict for pairing ${row.id}: existing=${row.result} incoming=${result}`);
+  }
+
+  const { data: updatedRow, error: updateError } = await db
+    .from('tournament_pairings')
+    .update({
+      result,
+      result_reason: reason,
+      completed_at: new Date().toISOString(),
+      presence_deadline: null,
+    })
+    .eq('id', row.id)
+    .select('tournament_id, round_number, board_number, white_player_id, black_player_id')
+    .maybeSingle();
+
+  if (updateError) {
+    throw new Error(`[Coordinator] Failed to update pairing ${row.id}: ${updateError.message}`);
+  }
+  if (!updatedRow) {
+    throw new Error(`[Coordinator] Update returned no row for pairing ${row.id}`);
+  }
+
+  await lockedAdvanceRound(row.tournament_id);
 
   return {
-    tournamentId: row.tournament_id,
-    roundNumber: row.round_number,
-    boardNumber: row.board_number,
-    whitePlayerId: row.white_player_id,
-    blackPlayerId: row.black_player_id,
-    updated,
+    tournamentId: updatedRow.tournament_id,
+    roundNumber: updatedRow.round_number,
+    boardNumber: updatedRow.board_number,
+    whitePlayerId: updatedRow.white_player_id,
+    blackPlayerId: updatedRow.black_player_id,
+    updated: true,
   };
 }
 
