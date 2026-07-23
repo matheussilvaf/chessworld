@@ -308,19 +308,19 @@ export class WorldScene extends Phaser.Scene {
     let midX = Math.floor(this.cameraTargetX * ppu) / ppu;
     let midY = Math.floor(this.cameraTargetY * ppu) / ppu;
 
-    // Clamp so the visible rect stays within map bounds
-    const { w, h } = this.cameraBounds;
+    // Clamp so the visible rect stays within map bounds (supports negative origin)
+    const { x: bx, y: by, w, h } = this.cameraBounds;
     const halfViewW = halfW / ppu;
     const halfViewH = halfH / ppu;
     if (w <= halfViewW * 2) {
-      midX = w / 2;
+      midX = bx + w / 2;
     } else {
-      midX = Phaser.Math.Clamp(midX, halfViewW, w - halfViewW);
+      midX = Phaser.Math.Clamp(midX, bx + halfViewW, bx + w - halfViewW);
     }
     if (h <= halfViewH * 2) {
-      midY = h / 2;
+      midY = by + h / 2;
     } else {
-      midY = Phaser.Math.Clamp(midY, halfViewH, h - halfViewH);
+      midY = Phaser.Math.Clamp(midY, by + halfViewH, by + h - halfViewH);
     }
 
     // Re-snap after clamping to maintain texel alignment
@@ -1940,9 +1940,21 @@ export class WorldScene extends Phaser.Scene {
         exitBottom: anchors.exitBottom,
         exitLeft: anchors.exitLeft,
         exitRight: anchors.exitRight,
-        cameraFocus: null,
-        overlayArea: null,
+        cameraFocus: anchors.cameraFocus,
+        overlayArea: anchors.overlayArea,
       });
+
+      // Register with chess overlay so the board renders on module tables
+      if (anchors.overlayArea && this.chessOverlay) {
+        this.chessOverlay.registerTable({
+          tableId: runtimeId,
+          x: anchors.overlayArea.x,
+          y: anchors.overlayArea.y,
+          width: anchors.overlayArea.width,
+          height: anchors.overlayArea.height,
+        });
+        this.chessOverlay.showMatchOverlay(runtimeId, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+      }
     }
   }
 
@@ -1952,6 +1964,9 @@ export class WorldScene extends Phaser.Scene {
       const tableAnchors = this.arenaManager.getTableAnchors();
       for (const runtimeId of tableAnchors.keys()) {
         this.tableRegistry.tables.delete(runtimeId);
+        if (this.chessOverlay) {
+          this.chessOverlay.unregisterTable(runtimeId);
+        }
       }
       this.arenaManager.removeAll();
     }

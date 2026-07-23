@@ -22,23 +22,10 @@ export function useTournamentAutoSeat(
     if (state.currentRound === seatedForRound.current) return;
     if (seating.current) return;
     if (state.pairings.length === 0) return;
-    // Wait for modules to be loaded before seating
     if (state.modules.length === 0) return;
 
     const room = getWorldRoom();
     if (!room) return;
-
-    // Check if arena modules are loaded in the scene
-    const scene = (window as any).__worldScene;
-    if (!scene || !scene.arenaManager || !scene.arenaManager.isLoaded) {
-      // Retry after a short delay
-      if (!seatRetryTimer.current) {
-        seatRetryTimer.current = window.setTimeout(() => {
-          seatRetryTimer.current = null;
-        }, 500);
-      }
-      return;
-    }
 
     const myPairing = state.pairings.find(
       p => p.whitePlayerId === user.id || p.blackPlayerId === user.id
@@ -54,33 +41,49 @@ export function useTournamentAutoSeat(
       return;
     }
 
-    seating.current = true;
-    const color: 'w' | 'b' = myPairing.whitePlayerId === user.id ? 'w' : 'b';
-    const opponentId = color === 'w' ? myPairing.blackPlayerId : myPairing.whitePlayerId;
+    // Wait for arena modules to be loaded in the scene before sending seat request
+    const attemptSeat = (attempts: number) => {
+      if (attempts > 20) {
+        console.warn('[useTournamentAutoSeat] Gave up waiting for arenaManager after 20 attempts');
+        seating.current = false;
+        return;
+      }
+      const scene = (window as any).__worldScene;
+      if (!scene || !scene.arenaManager || !scene.arenaManager.isLoaded) {
+        seatRetryTimer.current = window.setTimeout(() => attemptSeat(attempts + 1), 500);
+        return;
+      }
 
-    room.send('tournament_seat', {
-      boardId: myPairing.runtimeTableId,
-      baseTimeSeconds: state.baseTimeSeconds,
-      incrementSeconds: state.incrementSeconds,
-      timeCategory: state.timeControlCategory,
-      timeLabel: state.timeControlLabel,
-      opponentId,
-      color,
-    });
+      const color: 'w' | 'b' = myPairing.whitePlayerId === user.id ? 'w' : 'b';
+      const opponentId = color === 'w' ? myPairing.blackPlayerId : myPairing.whitePlayerId;
+
+      room.send('tournament_seat', {
+        boardId: myPairing.runtimeTableId,
+        baseTimeSeconds: stateRef.current.baseTimeSeconds,
+        incrementSeconds: stateRef.current.incrementSeconds,
+        timeCategory: stateRef.current.timeControlCategory,
+        timeLabel: stateRef.current.timeControlLabel,
+        opponentId,
+        color,
+      });
+
+      seatedForRound.current = stateRef.current.currentRound;
+    };
+
+    seating.current = true;
+    attemptSeat(0);
 
     if (!listenersAttached.current) {
       listenersAttached.current = true;
 
       room.onMessage('tournament_seated', (msg: { boardId: string; color: string; seat: string }) => {
         seatPlayerWhenReady(msg.boardId, 'player', msg.seat, msg.color as 'w' | 'b');
-        seatedForRound.current = stateRef.current.currentRound;
         seating.current = false;
       });
 
       room.onMessage('match_started', (msg: { matchId: string; boardId: string; color: string }) => {
         const seat = msg.color === 'w' ? 'bottom' : 'top';
         seatPlayerWhenReady(msg.boardId, 'player', seat, msg.color as 'w' | 'b');
-        seatedForRound.current = stateRef.current.currentRound;
         seating.current = false;
       });
     }
@@ -150,17 +153,18 @@ function seatPlayerWhenReady(boardId: string, role: string, seat: string, color:
   const scene = (window as any).__worldScene;
   if (!scene) return;
 
-  // Check if the table is in the registry
   if (scene.tableRegistry?.tables?.has(boardId)) {
     scene.seatPlayer(boardId, role, seat, color);
     return;
   }
 
-  // Retry up to 10 times (5 seconds total)
   let attempts = 0;
   const retry = () => {
     attempts++;
-    if (attempts > 10) return;
+    if (attempts > 20) {
+      console.warn('[useTournamentAutoSeat] seatPlayerWhenReady gave up for', boardId);
+      return;
+    }
     const s = (window as any).__worldScene;
     if (s?.tableRegistry?.tables?.has(boardId)) {
       s.seatPlayer(boardId, role, seat, color);

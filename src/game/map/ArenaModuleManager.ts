@@ -34,6 +34,8 @@ export interface TableAnchorSet {
   exitBottom: { x: number; y: number; direction: string };
   exitLeft: { x: number; y: number; direction: string };
   exitRight: { x: number; y: number; direction: string };
+  overlayArea: { x: number; y: number; width: number; height: number; boardFiles: number; boardRanks: number } | null;
+  cameraFocus: { x: number; y: number; width: number; height: number; padding: number } | null;
 }
 
 const MODULE_PATHS: Record<string, string> = {
@@ -97,13 +99,14 @@ export class ArenaModuleManager {
       const sprite = this.scene.add.sprite(obj.x, obj.y, tsDef.textureKey);
       sprite.setOrigin(0, 1);
       sprite.setDisplaySize(obj.width || 32, obj.height || 32);
-      sprite.setDepth(200); // above characters
 
       if (props.visualState === 'closed') {
         this.doorClosedSprite = sprite;
+        sprite.setDepth(3); // below player characters
         sprite.setVisible(true);
       } else if (props.visualState === 'open') {
         this.doorOpenSprite = sprite;
+        sprite.setDepth(3);
         sprite.setVisible(false);
       }
     }
@@ -308,7 +311,7 @@ export class ArenaModuleManager {
       } else if (l.type === 'objectgroup') {
         const name = (l.name || '').toLowerCase();
         // Skip logical layers
-        if (name === 'collisions' || name === 'module_connectors' || name.includes('character_anchors') || name === 'spawns' || name === 'ui anchors') continue;
+        if (name === 'collisions' || name === 'module_connectors' || name.includes('character_anchors') || name === 'spawns' || name === 'ui anchors' || name === 'camera_anchors' || name === 'chess_tables_interactions') continue;
 
         for (const obj of l.objects || []) {
           if (!obj.gid || obj.visible === false) continue;
@@ -382,6 +385,43 @@ export class ArenaModuleManager {
     const anchorsLayer = this.findObjectLayer(tmjData.layers, 'character_anchors');
     if (!anchorsLayer) return;
 
+    // Extract overlay areas from 'ui anchors' layer
+    const uiAnchorsLayer = this.findObjectLayer(tmjData.layers, 'ui anchors');
+    const overlayBySlot = new Map<string, { x: number; y: number; width: number; height: number; boardFiles: number; boardRanks: number }>();
+    if (uiAnchorsLayer) {
+      for (const obj of uiAnchorsLayer) {
+        const props = this.getObjProps(obj);
+        const tableId = props.tableId as string;
+        if (!tableId || props.anchorType !== 'chess_board_overlay') continue;
+        overlayBySlot.set(tableId, {
+          x: obj.x + offsetX,
+          y: obj.y + offsetY,
+          width: obj.width || 128,
+          height: obj.height || 128,
+          boardFiles: (props.boardFiles as number) || 8,
+          boardRanks: (props.boardRanks as number) || 8,
+        });
+      }
+    }
+
+    // Extract camera focus from 'camera_anchors' layer
+    const cameraAnchorsLayer = this.findObjectLayer(tmjData.layers, 'camera_anchors');
+    const cameraBySlot = new Map<string, { x: number; y: number; width: number; height: number; padding: number }>();
+    if (cameraAnchorsLayer) {
+      for (const obj of cameraAnchorsLayer) {
+        const props = this.getObjProps(obj);
+        const tableId = props.tableId as string;
+        if (!tableId || props.anchorType !== 'camera_focus') continue;
+        cameraBySlot.set(tableId, {
+          x: obj.x + offsetX,
+          y: obj.y + offsetY,
+          width: obj.width || 150,
+          height: obj.height || 150,
+          padding: parseInt(props.padding as string) || 32,
+        });
+      }
+    }
+
     // Group anchors by tableId
     const byTable = new Map<string, any[]>();
     for (const obj of anchorsLayer) {
@@ -420,6 +460,8 @@ export class ArenaModuleManager {
         exitBottom: find('chess_seat_exit', 'player', undefined, 'bottom'),
         exitLeft: find('chess_seat_exit', 'spectator', undefined, 'left'),
         exitRight: find('chess_seat_exit', 'spectator', undefined, 'right'),
+        overlayArea: overlayBySlot.get(slotId) || null,
+        cameraFocus: cameraBySlot.get(slotId) || null,
       };
 
       modInstance.tableAnchors.set(runtimeId, anchorSet);

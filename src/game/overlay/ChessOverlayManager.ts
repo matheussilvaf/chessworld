@@ -226,6 +226,16 @@ export class ChessOverlayManager {
     }
   }
 
+  unregisterTable(tableId: string) {
+    this.removeAll(tableId);
+    const overlay = this.overlays.get(tableId);
+    if (overlay) {
+      overlay.container.destroy();
+      this.overlays.delete(tableId);
+    }
+    this.tables.delete(tableId);
+  }
+
   setActiveTable(tableId: string) {
     this.activeTableId = tableId;
     const overlay = this.overlays.get(tableId);
