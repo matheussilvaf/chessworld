@@ -1069,6 +1069,50 @@ export async function reportMatchResult(
   return !!data;
 }
 
+export interface PendingPairing {
+  tournamentId: string;
+  roundNumber: number;
+  boardNumber: number;
+  whitePlayerId: string | null;
+  blackPlayerId: string | null;
+  updated: boolean;
+}
+
+export async function reportMatchResultByRuntimeTableId(
+  runtimeTableId: string,
+  result: string,
+  reason: string,
+): Promise<PendingPairing | null> {
+  const db = getClient();
+
+  const { data: row } = await db
+    .from('tournament_pairings')
+    .select('tournament_id, round_number, board_number, white_player_id, black_player_id')
+    .eq('runtime_table_id', runtimeTableId)
+    .is('result', null)
+    .eq('is_bye', false)
+    .maybeSingle();
+
+  if (!row) return null;
+
+  const updated = await reportMatchResult(
+    row.tournament_id,
+    row.round_number,
+    row.board_number,
+    result,
+    reason,
+  );
+
+  return {
+    tournamentId: row.tournament_id,
+    roundNumber: row.round_number,
+    boardNumber: row.board_number,
+    whitePlayerId: row.white_player_id,
+    blackPlayerId: row.black_player_id,
+    updated,
+  };
+}
+
 async function isPlayerPresent(playerId: string): Promise<boolean> {
   const room = getTournamentRoomInstance();
   if (!room) {
