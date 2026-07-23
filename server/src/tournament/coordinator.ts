@@ -211,9 +211,21 @@ async function transitionToRoundActive(instance: TournamentInstance): Promise<vo
   const db = getClient();
   const config = instance.configSnapshot || await loadConfig();
 
+  // Stuck detection: if tournament has been 'starting' for > 60s, cancel it
+  if (instance.startedAt) {
+    const elapsed = Date.now() - new Date(instance.startedAt).getTime();
+    if (elapsed > 60_000) {
+      console.error(`[Coordinator] Tournament ${instance.id} stuck in 'starting' for ${Math.round(elapsed/1000)}s, cancelling`);
+      await atomicTransition(instance.id, 'starting', 'cancelled_insufficient_players');
+      await db.from('tournament_instances').update({ completed_at: new Date().toISOString() }).eq('id', instance.id);
+      await ensureNextCycleExists();
+      return;
+    }
+  }
+
   const engineStatus = await getEngineStatus();
   if (!engineStatus.available) {
-    console.error('[Coordinator] Engine unavailable, cannot start tournament');
+    console.error('[Coordinator] Engine unavailable, cannot start tournament. Error:', engineStatus.error);
     return;
   }
 
@@ -231,44 +243,54 @@ async function transitionToRoundActive(instance: TournamentInstance): Promise<vo
   let swissId = instance.swissTournamentId;
 
   if (!swissId) {
-    const swissT = await service.createTournament(`Tournament-${instance.id}`, undefined);
-    swissId = swissT.id;
+    try {
+      console.log(`[Coordinator] Creating swiss tournament for ${instance.id} with ${regs.length} players`);
+      const swissT = await service.createTournament(`Tournament-${instance.id}`, undefined);
+      swissId = swissT.id;
+      console.log(`[Coordinator] Swiss tournament created: ${swissId}`);
 
-    const initialColor = config.swissConfig.initialColor;
-    await service.setInitialColor(swissId, initialColor);
-    await service.setRoundMode(swissId, config.swissConfig.roundMode, config.swissConfig.manualRoundCount || undefined);
+      const initialColor = config.swissConfig.initialColor;
+      await service.setInitialColor(swissId, initialColor);
+      await service.setRoundMode(swissId, config.swissConfig.roundMode, config.swissConfig.manualRoundCount || undefined);
 
-    for (const reg of regs) {
-      await service.addPlayer(swissId, reg.username, reg.rating);
-    }
+      for (const reg of regs) {
+        await service.addPlayer(swissId, reg.username, reg.rating);
+      }
+      console.log(`[Coordinator] Added ${regs.length} players to swiss tournament`);
 
-    const startResult = await service.startTournament(swissId);
-    if (!startResult.success) {
-      console.error('[Coordinator] Swiss start failed:', startResult.error);
-      await atomicTransition(instance.id, 'starting', 'cancelled_insufficient_players');
-      await ensureNextCycleExists();
+      const startResult = await service.startTournament(swissId);
+      if (!startResult.success) {
+        console.error('[Coordinator] Swiss start failed:', startResult.error);
+        await atomicTransition(instance.id, 'starting', 'cancelled_insufficient_players');
+        await db.from('tournament_instances').update({ completed_at: new Date().toISOString() }).eq('id', instance.id);
+        await ensureNextCycleExists();
+        return;
+      }
+      console.log(`[Coordinator] Swiss tournament started successfully`);
+
+      const swissT2 = await service.getTournament(swissId);
+      if (!swissT2) return;
+
+      const layout = computeArenaLayout(instance.id, Math.floor(regs.length / 2));
+
+      await db
+        .from('tournament_instances')
+        .update({
+          swiss_tournament_id: swissId,
+          total_rounds: swissT2.config.totalRounds,
+          current_round: 1,
+          arena_layout: layout,
+        })
+        .eq('id', instance.id);
+
+      await createRoundRecords(instance.id, swissId, swissT2, 1, layout, regs);
+      await atomicTransition(instance.id, 'starting', 'round_active');
+
+      console.log(`[Coordinator] Round 1 started for tournament ${instance.id}`);
+    } catch (err: any) {
+      console.error(`[Coordinator] Error starting swiss tournament:`, err.message, err.stack);
       return;
     }
-
-    const swissT2 = await service.getTournament(swissId);
-    if (!swissT2) return;
-
-    const layout = computeArenaLayout(instance.id, Math.floor(regs.length / 2));
-
-    await db
-      .from('tournament_instances')
-      .update({
-        swiss_tournament_id: swissId,
-        total_rounds: swissT2.config.totalRounds,
-        current_round: 1,
-        arena_layout: layout,
-      })
-      .eq('id', instance.id);
-
-    await createRoundRecords(instance.id, swissId, swissT2, 1, layout, regs);
-    await atomicTransition(instance.id, 'starting', 'round_active');
-
-    console.log(`[Coordinator] Round 1 started for tournament ${instance.id}`);
   } else {
     await atomicTransition(instance.id, 'starting', 'round_active');
   }

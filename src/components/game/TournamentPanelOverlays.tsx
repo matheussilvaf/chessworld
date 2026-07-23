@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useTournamentRoom } from '../../hooks/useTournamentRoom';
 import { TournamentRegistryPanel } from '../tournament/TournamentRegistryPanel';
 import { TournamentStandingsPanel } from '../tournament/TournamentStandingsPanel';
@@ -16,6 +16,8 @@ export function TournamentPanelOverlays() {
   const { state, connected, connect, register, unregister } = useTournamentRoom();
   const [panelRects, setPanelRects] = useState<{ registry?: PanelRect; standings?: PanelRect } | null>(null);
   const [inReception, setInReception] = useState(false);
+  const prevDoorOpen = useRef(false);
+  const prevModules = useRef<string>('');
 
   useEffect(() => {
     let frameId: number;
@@ -39,6 +41,41 @@ export function TournamentPanelOverlays() {
       connect();
     }
   }, [inReception, user, connected, connect]);
+
+  // React to tournament state changes - load/unload arena modules
+  useEffect(() => {
+    if (!inReception || !connected) return;
+    const scene = (window as any).__worldScene;
+    if (!scene) return;
+
+    // Door state
+    const shouldOpenDoor = state.doorOpen;
+    if (shouldOpenDoor !== prevDoorOpen.current) {
+      prevDoorOpen.current = shouldOpenDoor;
+      if (typeof scene.setDoorState === 'function') {
+        scene.setDoorState(shouldOpenDoor);
+      }
+    }
+
+    // Arena modules
+    const modulesKey = JSON.stringify(state.modules);
+    if (modulesKey !== prevModules.current && state.modules.length > 0) {
+      prevModules.current = modulesKey;
+      if (typeof scene.loadArenaModules === 'function') {
+        scene.loadArenaModules(state.modules);
+      }
+    }
+
+    // Remove modules when tournament ends
+    if (state.status === 'idle' || state.status === 'registration_open') {
+      if (prevModules.current !== '[]' && prevModules.current !== '') {
+        prevModules.current = '[]';
+        if (typeof scene.removeArenaModules === 'function') {
+          scene.removeArenaModules();
+        }
+      }
+    }
+  }, [state.doorOpen, state.modules, state.status, inReception, connected]);
 
   if (!panelRects || !connected) return null;
   if (state.status === 'idle' && !state.startsAt) return null;

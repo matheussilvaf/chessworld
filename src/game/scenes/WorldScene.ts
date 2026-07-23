@@ -150,9 +150,15 @@ export class WorldScene extends Phaser.Scene {
     for (const ts of ALL_TILESETS) {
       this.load.image(ts.textureKey, MAP_CONFIG.basePath + ts.image);
     }
+
+    // Preload tournament arena module maps
+    this.load.tilemapTiledJSON('tournament_table_module_double', '/assets/world-v2/tournament_table_module_double.tmj');
+    this.load.tilemapTiledJSON('tournament_table_module_single', '/assets/world-v2/tournament_table_module_single.tmj');
+    this.load.tilemapTiledJSON('tournament_table_module_end', '/assets/world-v2/tournament_table_module_end.tmj');
   }
 
   create() {
+    (window as any).__worldScene = this;
     const map = this.make.tilemap({ key: MAP_CONFIG.key });
     this.currentTilemap = map;
 
@@ -1892,6 +1898,298 @@ export class WorldScene extends Phaser.Scene {
     if (this.currentTilemap) {
       this.currentTilemap.destroy();
       this.currentTilemap = null;
+    }
+  }
+
+  // Tournament arena module loading
+  private arenaModuleLayers: Phaser.Tilemaps.TilemapLayer[] = [];
+  private arenaModuleBodies: MatterJS.BodyType[] = [];
+  private arenaModuleSprites: Phaser.GameObjects.Sprite[] = [];
+  private arenaLoaded = false;
+  private doorOpen = false;
+  private doorObjects: { closed: Phaser.GameObjects.GameObject | null; open: Phaser.GameObjects.GameObject | null; blocker: MatterJS.BodyType | null } = { closed: null, open: null, blocker: null };
+
+  public async loadArenaModules(modules: Array<{ instanceId: string; moduleType: string; order: number }>) {
+    if (this.arenaLoaded || modules.length === 0) return;
+    console.log('[WorldScene] Loading arena modules:', modules.length);
+
+    const currentTmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
+    if (!currentTmjData) return;
+
+    // Find reception_north_connector
+    const receptionConnector = this.findConnectorObject(currentTmjData.layers, 'reception_north_connector');
+    if (!receptionConnector) {
+      console.warn('[WorldScene] reception_north_connector not found');
+      return;
+    }
+
+    const sorted = [...modules].sort((a, b) => a.order - b.order);
+    let previousNorth = { x: receptionConnector.x, y: receptionConnector.y };
+
+    for (const mod of sorted) {
+      const mapKey = this.getModuleMapKey(mod.moduleType);
+      const mapPath = `/assets/world-v2/${mapKey}.tmj`;
+
+      // Load TMJ if not cached
+      const cacheKey = `arena_${mod.instanceId}`;
+      if (!this.cache.tilemap.has(cacheKey)) {
+        if (!this.cache.tilemap.has(mapKey)) {
+          await new Promise<void>((resolve, reject) => {
+            this.load.tilemapTiledJSON(mapKey, mapPath);
+            this.load.once('complete', () => resolve());
+            this.load.once('loaderror', () => reject(new Error(`Failed to load module: ${mapPath}`)));
+            this.load.start();
+          });
+        }
+      }
+
+      const modTmjData = this.cache.tilemap.get(mapKey)?.data;
+      if (!modTmjData) {
+        console.warn(`[WorldScene] No TMJ data for module ${mapKey}`);
+        continue;
+      }
+
+      // Find south connector in module
+      const connectors = this.getModuleConnectorNames(mod.moduleType);
+      const southConn = this.findConnectorObject(modTmjData.layers, connectors.south);
+      if (!southConn) {
+        console.warn(`[WorldScene] ${connectors.south} not found in ${mapKey}`);
+        continue;
+      }
+
+      // Calculate offset
+      const offsetX = previousNorth.x - southConn.x;
+      const offsetY = previousNorth.y - southConn.y;
+
+      // Render tile layers at offset
+      this.renderModuleTileLayers(modTmjData, mapKey, offsetX, offsetY);
+
+      // Add collisions at offset
+      this.addModuleCollisions(modTmjData, offsetX, offsetY, mod.instanceId);
+
+      // Find north connector for next module
+      if (connectors.north) {
+        const northConn = this.findConnectorObject(modTmjData.layers, connectors.north);
+        if (northConn) {
+          previousNorth = { x: northConn.x + offsetX, y: northConn.y + offsetY };
+        }
+      }
+    }
+
+    // Expand world bounds to include all modules
+    this.expandBoundsForArena(currentTmjData, sorted, previousNorth);
+
+    this.arenaLoaded = true;
+    console.log('[WorldScene] Arena modules loaded successfully');
+  }
+
+  public removeArenaModules() {
+    if (!this.arenaLoaded) return;
+    for (const layer of this.arenaModuleLayers) {
+      layer.destroy();
+    }
+    this.arenaModuleLayers = [];
+    for (const body of this.arenaModuleBodies) {
+      this.matter.world.remove(body);
+    }
+    this.arenaModuleBodies = [];
+    for (const sprite of this.arenaModuleSprites) {
+      sprite.destroy();
+    }
+    this.arenaModuleSprites = [];
+    this.arenaLoaded = false;
+
+    // Restore bounds to current map
+    const tmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
+    if (tmjData) {
+      const mapWidth = tmjData.width * (tmjData.tilewidth || MAP_CONFIG.tileSize);
+      const mapHeight = tmjData.height * (tmjData.tileheight || MAP_CONFIG.tileSize);
+      this.matter.world.setBounds(0, 0, mapWidth, mapHeight);
+      this.cameraBounds = { x: 0, y: 0, w: mapWidth, h: mapHeight };
+    }
+    console.log('[WorldScene] Arena modules removed');
+  }
+
+  public setDoorState(open: boolean) {
+    if (this.doorOpen === open) return;
+    this.doorOpen = open;
+
+    const tmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
+    if (!tmjData) return;
+
+    // Find door-related tile layers and toggle visibility
+    for (const layer of this.mapTileLayers) {
+      const name = (layer as any).layer?.name?.toLowerCase() || '';
+      if (name.includes('north_extension_door_closed') || name === 'door_closed') {
+        layer.setVisible(!open);
+      } else if (name.includes('north_extension_door_open') || name === 'door_open') {
+        layer.setVisible(open);
+      }
+    }
+
+    // Toggle door blocker collision
+    const collisions = this.findObjectLayerInTMJ(tmjData.layers, 'dynamic_collisions') ||
+                       this.findObjectLayerInTMJ(tmjData.layers, 'collisions');
+    if (collisions) {
+      for (const obj of collisions) {
+        if (obj.name === 'north_extension_door_blocker') {
+          // Find the body and enable/disable
+          for (const body of this.mapCollisionBodies) {
+            if ((body as any).label === 'north_extension_door_blocker') {
+              if (open) {
+                this.matter.world.remove(body);
+              }
+              break;
+            }
+          }
+          break;
+        }
+      }
+    }
+    console.log(`[WorldScene] Door ${open ? 'opened' : 'closed'}`);
+  }
+
+  private renderModuleTileLayers(tmjData: any, mapKey: string, offsetX: number, offsetY: number) {
+    const logicalSet = new Set(MAP_CONFIG.logicalLayers.map(n => n.toLowerCase()));
+    const tileWidth = tmjData.tilewidth || 16;
+    const tileHeight = tmjData.tileheight || 16;
+
+    // Render tile layers as sprites/graphics at offset using raw tile data
+    this.renderTileLayersFromRaw(tmjData, offsetX, offsetY, logicalSet);
+  }
+
+  private renderTileLayersFromRaw(tmjData: any, offsetX: number, offsetY: number, logicalSet: Set<string>) {
+    const tileWidth = tmjData.tilewidth || 16;
+    const tileHeight = tmjData.tileheight || 16;
+    const mapWidth = tmjData.width;
+
+    const processLayers = (layers: any[], depth: number) => {
+      for (const l of layers) {
+        if (l.type === 'group') {
+          processLayers(l.layers || [], depth);
+        } else if (l.type === 'tilelayer' && l.data) {
+          const name = l.name?.toLowerCase() || '';
+          if (logicalSet.has(name)) continue;
+          if (l.visible === false) continue;
+
+          // Render each tile as a sprite from the appropriate tileset
+          for (let i = 0; i < l.data.length; i++) {
+            const gid = l.data[i];
+            if (gid === 0) continue;
+
+            const col = i % mapWidth;
+            const row = Math.floor(i / mapWidth);
+            const x = col * tileWidth + offsetX;
+            const y = row * tileHeight + offsetY;
+
+            // Find the tileset for this GID
+            const tsInfo = findTilesetForGidInMap(gid, tmjData.tilesets);
+            if (!tsInfo) continue;
+
+            const textureKey = tsInfo.textureKey;
+            if (!textureKey || !this.textures.exists(textureKey)) continue;
+
+            const localId = gid - tsInfo.firstgid;
+            const tsImage = this.textures.get(textureKey);
+            const tsWidth = tsImage.source[0]?.width || 256;
+            const columns = Math.floor(tsWidth / tileWidth);
+            if (columns === 0) continue;
+
+            const frameX = (localId % columns) * tileWidth;
+            const frameY = Math.floor(localId / columns) * tileHeight;
+
+            // Create a sprite from the texture frame
+            const frameName = `${textureKey}_${localId}`;
+            if (!this.textures.get(textureKey).has(frameName)) {
+              this.textures.get(textureKey).add(frameName, 0, frameX, frameY, tileWidth, tileHeight);
+            }
+
+            const sprite = this.add.sprite(x + tileWidth / 2, y + tileHeight / 2, textureKey, frameName);
+            sprite.setOrigin(0.5, 0.5);
+            sprite.setDepth(name.includes('above') ? 200 : 0);
+            this.arenaModuleSprites.push(sprite);
+          }
+        }
+      }
+    };
+    processLayers(tmjData.layers, 0);
+  }
+
+  private addModuleCollisions(tmjData: any, offsetX: number, offsetY: number, moduleId: string) {
+    const collisionObjects = this.findObjectLayerInTMJ(tmjData.layers, 'collisions');
+    if (!collisionObjects) return;
+
+    for (const obj of collisionObjects) {
+      const label = `${moduleId}_${obj.name || obj.id}`;
+      if (obj.polygon) {
+        const absoluteVerts = obj.polygon.map((p: { x: number; y: number }) => ({
+          x: obj.x + p.x + offsetX,
+          y: obj.y + p.y + offsetY,
+        }));
+        const xs = absoluteVerts.map((v: any) => v.x);
+        const ys = absoluteVerts.map((v: any) => v.y);
+        const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+        const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+        const centeredVerts = absoluteVerts.map((v: any) => ({ x: v.x - cx, y: v.y - cy }));
+        try {
+          const body = this.matter.add.fromVertices(cx, cy, [centeredVerts], { isStatic: true, label });
+          if (body) this.arenaModuleBodies.push(body);
+        } catch { /* skip invalid polygon */ }
+      } else if (obj.width && obj.height) {
+        const cx = obj.x + obj.width / 2 + offsetX;
+        const cy = obj.y + obj.height / 2 + offsetY;
+        const body = this.matter.add.rectangle(cx, cy, obj.width, obj.height, { isStatic: true, label });
+        if (body) this.arenaModuleBodies.push(body);
+      }
+    }
+  }
+
+  private expandBoundsForArena(receptionTmj: any, modules: any[], lastNorth: { x: number; y: number }) {
+    const recWidth = receptionTmj.width * (receptionTmj.tilewidth || MAP_CONFIG.tileSize);
+    const recHeight = receptionTmj.height * (receptionTmj.tileheight || MAP_CONFIG.tileSize);
+
+    // Arena grows north (negative Y direction typically), so we expand bounds
+    const minY = Math.min(0, lastNorth.y - 200);
+    const maxX = Math.max(recWidth, lastNorth.x + 400);
+    const maxY = recHeight;
+    const totalWidth = maxX;
+    const totalHeight = maxY - minY;
+
+    this.matter.world.setBounds(0, minY, totalWidth, totalHeight);
+    this.cameraBounds = { x: 0, y: minY, w: totalWidth, h: totalHeight };
+  }
+
+  private findConnectorObject(layers: any[], name: string): { x: number; y: number } | null {
+    for (const l of layers) {
+      if (l.type === 'group') {
+        const found = this.findConnectorObject(l.layers || [], name);
+        if (found) return found;
+      } else if (l.type === 'objectgroup') {
+        for (const obj of l.objects || []) {
+          if (obj.name === name) {
+            return { x: obj.x, y: obj.y };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  private getModuleMapKey(moduleType: string): string {
+    switch (moduleType) {
+      case 'double': return 'tournament_table_module_double';
+      case 'single': return 'tournament_table_module_single';
+      case 'end': return 'tournament_table_module_end';
+      default: return moduleType;
+    }
+  }
+
+  private getModuleConnectorNames(moduleType: string): { south: string; north?: string } {
+    switch (moduleType) {
+      case 'double': return { south: 'double_module_south_connector', north: 'double_module_north_connector' };
+      case 'single': return { south: 'single_module_south_connector', north: 'single_module_north_connector' };
+      case 'end': return { south: 'end_module_south_connector' };
+      default: return { south: '' };
     }
   }
 
