@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import decomp from 'poly-decomp';
 import { MAP_CONFIG } from '../config/mapConfig';
 import { WORLD_TILESETS, ALL_TILESETS, EXTRA_TILESETS, findTilesetForGid, findTilesetForGidInMap, getTextureKeyForTileset } from '../config/worldAssets';
+import { ArenaModuleManager } from '../map/ArenaModuleManager';
 import {
   getCharacter,
   getIdleFrame,
@@ -122,7 +123,7 @@ export class WorldScene extends Phaser.Scene {
   public onZoneChange?: (event: ZoneChangeEvent) => void;
 
   private interactionSystem!: InteractionSystem;
-  private tableRegistry: TableRegistry | null = null;
+  public tableRegistry: TableRegistry | null = null;
   private tournamentPanelAnchors: { registry: { x: number; y: number; width: number; height: number } | null; standings: { x: number; y: number; width: number; height: number } | null } = { registry: null, standings: null };
   private currentSeatInfo: { tableId: string; role: 'player' | 'spectator'; seat: string } | null = null;
   private seatTween: Phaser.Tweens.Tween | null = null;
@@ -1901,365 +1902,87 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  // Tournament arena module loading
-  private arenaModuleLayers: Phaser.Tilemaps.TilemapLayer[] = [];
-  private arenaModuleBodies: MatterJS.BodyType[] = [];
-  private arenaModuleSprites: Phaser.GameObjects.Sprite[] = [];
-  private arenaLoaded = false;
-  private doorOpen = false;
-  private doorObjects: { closed: Phaser.GameObjects.GameObject | null; open: Phaser.GameObjects.GameObject | null; blocker: MatterJS.BodyType | null } = { closed: null, open: null, blocker: null };
+  // Tournament arena module system
+  public arenaManager: ArenaModuleManager | null = null;
 
   public async loadArenaModules(modules: Array<{ instanceId: string; moduleType: string; order: number }>, tables?: Array<{ runtimeTableId: string; tableNumber: number; moduleInstanceId: string; localSlotId: string }>) {
-    if (this.arenaLoaded || modules.length === 0) return;
-    console.log('[WorldScene] Loading arena modules:', modules.length);
+    if (!this.arenaManager) {
+      this.arenaManager = new ArenaModuleManager(this);
+    }
+    if (this.arenaManager.isLoaded) return;
 
-    const currentTmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
-    if (!currentTmjData) return;
+    const bounds = await this.arenaManager.loadModules(modules, tables || [], this.currentMapKey);
 
-    // Find reception_north_connector
-    const receptionConnector = this.findConnectorObject(currentTmjData.layers, 'reception_north_connector');
-    if (!receptionConnector) {
-      console.warn('[WorldScene] reception_north_connector not found');
-      return;
+    // Expand world and camera bounds to include modules
+    if (bounds.minY < 0) {
+      const currentTmj = this.cache.tilemap.get(this.currentMapKey)?.data;
+      const recWidth = currentTmj ? currentTmj.width * (currentTmj.tilewidth || 32) : 1440;
+      const recHeight = currentTmj ? currentTmj.height * (currentTmj.tileheight || 32) : 896;
+      const totalWidth = Math.max(recWidth, bounds.width);
+      const totalHeight = recHeight - bounds.minY;
+      this.matter.world.setBounds(0, bounds.minY, totalWidth, totalHeight);
+      this.cameraBounds = { x: 0, y: bounds.minY, w: totalWidth, h: totalHeight };
+      this.cameras.main.setBounds(0, bounds.minY, totalWidth, totalHeight);
     }
 
-    const sorted = [...modules].sort((a, b) => a.order - b.order);
-    let previousNorth = { x: receptionConnector.x, y: receptionConnector.y };
-
-    for (const mod of sorted) {
-      const mapKey = this.getModuleMapKey(mod.moduleType);
-      const mapPath = `/assets/world-v2/${mapKey}.tmj`;
-
-      // Load TMJ if not cached
-      const cacheKey = `arena_${mod.instanceId}`;
-      if (!this.cache.tilemap.has(cacheKey)) {
-        if (!this.cache.tilemap.has(mapKey)) {
-          await new Promise<void>((resolve, reject) => {
-            this.load.tilemapTiledJSON(mapKey, mapPath);
-            this.load.once('complete', () => resolve());
-            this.load.once('loaderror', () => reject(new Error(`Failed to load module: ${mapPath}`)));
-            this.load.start();
-          });
-        }
-      }
-
-      const modTmjData = this.cache.tilemap.get(mapKey)?.data;
-      if (!modTmjData) {
-        console.warn(`[WorldScene] No TMJ data for module ${mapKey}`);
-        continue;
-      }
-
-      // Find south connector in module
-      const connectors = this.getModuleConnectorNames(mod.moduleType);
-      const southConn = this.findConnectorObject(modTmjData.layers, connectors.south);
-      if (!southConn) {
-        console.warn(`[WorldScene] ${connectors.south} not found in ${mapKey}`);
-        continue;
-      }
-
-      // Calculate offset
-      const offsetX = previousNorth.x - southConn.x;
-      const offsetY = previousNorth.y - southConn.y;
-
-      // Render tile layers at offset
-      this.renderModuleTileLayers(modTmjData, mapKey, offsetX, offsetY);
-
-      // Add collisions at offset
-      this.addModuleCollisions(modTmjData, offsetX, offsetY, mod.instanceId);
-
-      // Register module table anchors in the table registry with offset
-      const moduleTables = (tables || []).filter(t => t.moduleInstanceId === mod.instanceId);
-      this.registerModuleTableAnchors(modTmjData, offsetX, offsetY, mod.instanceId, moduleTables);
-
-      // Find north connector for next module
-      if (connectors.north) {
-        const northConn = this.findConnectorObject(modTmjData.layers, connectors.north);
-        if (northConn) {
-          previousNorth = { x: northConn.x + offsetX, y: northConn.y + offsetY };
-        }
-      }
-    }
-
-    // Expand world bounds to include all modules
-    this.expandBoundsForArena(currentTmjData, sorted, previousNorth);
-
-    this.arenaLoaded = true;
-    console.log('[WorldScene] Arena modules loaded successfully');
-  }
-
-  public removeArenaModules() {
-    if (!this.arenaLoaded) return;
-    for (const layer of this.arenaModuleLayers) {
-      layer.destroy();
-    }
-    this.arenaModuleLayers = [];
-    for (const body of this.arenaModuleBodies) {
-      this.matter.world.remove(body);
-    }
-    this.arenaModuleBodies = [];
-    for (const sprite of this.arenaModuleSprites) {
-      sprite.destroy();
-    }
-    this.arenaModuleSprites = [];
-    this.arenaLoaded = false;
-
-    // Restore bounds to current map
-    const tmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
-    if (tmjData) {
-      const mapWidth = tmjData.width * (tmjData.tilewidth || MAP_CONFIG.tileSize);
-      const mapHeight = tmjData.height * (tmjData.tileheight || MAP_CONFIG.tileSize);
-      this.matter.world.setBounds(0, 0, mapWidth, mapHeight);
-      this.cameraBounds = { x: 0, y: 0, w: mapWidth, h: mapHeight };
-    }
-    console.log('[WorldScene] Arena modules removed');
-  }
-
-  public setDoorState(open: boolean) {
-    if (this.doorOpen === open) return;
-    this.doorOpen = open;
-
-    const tmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
-    if (!tmjData) return;
-
-    // Find door-related tile layers and toggle visibility
-    for (const layer of this.mapTileLayers) {
-      const name = (layer as any).layer?.name?.toLowerCase() || '';
-      if (name.includes('north_extension_door_closed') || name === 'door_closed') {
-        layer.setVisible(!open);
-      } else if (name.includes('north_extension_door_open') || name === 'door_open') {
-        layer.setVisible(open);
-      }
-    }
-
-    // Toggle door blocker collision
-    const collisions = this.findObjectLayerInTMJ(tmjData.layers, 'dynamic_collisions') ||
-                       this.findObjectLayerInTMJ(tmjData.layers, 'collisions');
-    if (collisions) {
-      for (const obj of collisions) {
-        if (obj.name === 'north_extension_door_blocker') {
-          // Find the body and enable/disable
-          for (const body of this.mapCollisionBodies) {
-            if ((body as any).label === 'north_extension_door_blocker') {
-              if (open) {
-                this.matter.world.remove(body);
-              }
-              break;
-            }
-          }
-          break;
-        }
-      }
-    }
-    console.log(`[WorldScene] Door ${open ? 'opened' : 'closed'}`);
-  }
-
-  private renderModuleTileLayers(tmjData: any, mapKey: string, offsetX: number, offsetY: number) {
-    const logicalSet = new Set(MAP_CONFIG.logicalLayers.map(n => n.toLowerCase()));
-    const tileWidth = tmjData.tilewidth || 16;
-    const tileHeight = tmjData.tileheight || 16;
-
-    // Render tile layers as sprites/graphics at offset using raw tile data
-    this.renderTileLayersFromRaw(tmjData, offsetX, offsetY, logicalSet);
-  }
-
-  private renderTileLayersFromRaw(tmjData: any, offsetX: number, offsetY: number, logicalSet: Set<string>) {
-    const tileWidth = tmjData.tilewidth || 16;
-    const tileHeight = tmjData.tileheight || 16;
-    const mapWidth = tmjData.width;
-
-    // Normalize tilesets: external refs use 'source' instead of 'name'
-    const normalizedTilesets = (tmjData.tilesets || []).map((ts: any) => ({
-      firstgid: ts.firstgid,
-      name: ts.name || (ts.source ? ts.source.replace(/\.(tsx|tsj|json)$/, '') : ''),
-    }));
-
-    const processLayers = (layers: any[], depth: number) => {
-      for (const l of layers) {
-        if (l.type === 'group') {
-          processLayers(l.layers || [], depth);
-        } else if (l.type === 'tilelayer' && l.data) {
-          const name = l.name?.toLowerCase() || '';
-          if (logicalSet.has(name)) continue;
-          if (l.visible === false) continue;
-
-          // Render each tile as a sprite from the appropriate tileset
-          for (let i = 0; i < l.data.length; i++) {
-            const gid = l.data[i];
-            if (gid === 0) continue;
-
-            const col = i % mapWidth;
-            const row = Math.floor(i / mapWidth);
-            const x = col * tileWidth + offsetX;
-            const y = row * tileHeight + offsetY;
-
-            // Find the tileset for this GID
-            const tsInfo = findTilesetForGidInMap(gid, normalizedTilesets);
-            if (!tsInfo) continue;
-
-            const textureKey = tsInfo.textureKey;
-            if (!textureKey || !this.textures.exists(textureKey)) continue;
-
-            const localId = gid - tsInfo.firstgid;
-            const tsImage = this.textures.get(textureKey);
-            const tsWidth = tsImage.source[0]?.width || 256;
-            const columns = Math.floor(tsWidth / tileWidth);
-            if (columns === 0) continue;
-
-            const frameX = (localId % columns) * tileWidth;
-            const frameY = Math.floor(localId / columns) * tileHeight;
-
-            // Create a sprite from the texture frame
-            const frameName = `${textureKey}_${localId}`;
-            if (!this.textures.get(textureKey).has(frameName)) {
-              this.textures.get(textureKey).add(frameName, 0, frameX, frameY, tileWidth, tileHeight);
-            }
-
-            const sprite = this.add.sprite(x + tileWidth / 2, y + tileHeight / 2, textureKey, frameName);
-            sprite.setOrigin(0.5, 0.5);
-            sprite.setDepth(name.includes('above') ? 200 : 0);
-            this.arenaModuleSprites.push(sprite);
-          }
-        }
-      }
-    };
-    processLayers(tmjData.layers, 0);
-  }
-
-  private addModuleCollisions(tmjData: any, offsetX: number, offsetY: number, moduleId: string) {
-    const collisionObjects = this.findObjectLayerInTMJ(tmjData.layers, 'collisions');
-    if (!collisionObjects) return;
-
-    for (const obj of collisionObjects) {
-      const label = `${moduleId}_${obj.name || obj.id}`;
-      if (obj.polygon) {
-        const absoluteVerts = obj.polygon.map((p: { x: number; y: number }) => ({
-          x: obj.x + p.x + offsetX,
-          y: obj.y + p.y + offsetY,
-        }));
-        const xs = absoluteVerts.map((v: any) => v.x);
-        const ys = absoluteVerts.map((v: any) => v.y);
-        const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
-        const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-        const centeredVerts = absoluteVerts.map((v: any) => ({ x: v.x - cx, y: v.y - cy }));
-        try {
-          const body = this.matter.add.fromVertices(cx, cy, [centeredVerts], { isStatic: true, label });
-          if (body) this.arenaModuleBodies.push(body);
-        } catch { /* skip invalid polygon */ }
-      } else if (obj.width && obj.height) {
-        const cx = obj.x + obj.width / 2 + offsetX;
-        const cy = obj.y + obj.height / 2 + offsetY;
-        const body = this.matter.add.rectangle(cx, cy, obj.width, obj.height, { isStatic: true, label });
-        if (body) this.arenaModuleBodies.push(body);
-      }
-    }
-  }
-
-  private expandBoundsForArena(receptionTmj: any, modules: any[], lastNorth: { x: number; y: number }) {
-    const recWidth = receptionTmj.width * (receptionTmj.tilewidth || MAP_CONFIG.tileSize);
-    const recHeight = receptionTmj.height * (receptionTmj.tileheight || MAP_CONFIG.tileSize);
-
-    // Arena grows north (negative Y direction typically), so we expand bounds
-    const minY = Math.min(0, lastNorth.y - 200);
-    const maxX = Math.max(recWidth, lastNorth.x + 400);
-    const maxY = recHeight;
-    const totalWidth = maxX;
-    const totalHeight = maxY - minY;
-
-    this.matter.world.setBounds(0, minY, totalWidth, totalHeight);
-    this.cameraBounds = { x: 0, y: minY, w: totalWidth, h: totalHeight };
-  }
-
-  private findConnectorObject(layers: any[], name: string): { x: number; y: number } | null {
-    for (const l of layers) {
-      if (l.type === 'group') {
-        const found = this.findConnectorObject(l.layers || [], name);
-        if (found) return found;
-      } else if (l.type === 'objectgroup') {
-        for (const obj of l.objects || []) {
-          if (obj.name === name) {
-            return { x: obj.x, y: obj.y };
-          }
-        }
-      }
-    }
-    return null;
-  }
-
-  private getModuleMapKey(moduleType: string): string {
-    switch (moduleType) {
-      case 'double': return 'tournament_table_module_double';
-      case 'single': return 'tournament_table_module_single';
-      case 'end': return 'tournament_table_module_end';
-      default: return moduleType;
-    }
-  }
-
-  private getModuleConnectorNames(moduleType: string): { south: string; north?: string } {
-    switch (moduleType) {
-      case 'double': return { south: 'double_module_south_connector', north: 'double_module_north_connector' };
-      case 'single': return { south: 'single_module_south_connector', north: 'single_module_north_connector' };
-      case 'end': return { south: 'end_module_south_connector' };
-      default: return { south: '' };
-    }
-  }
-
-  private registerModuleTableAnchors(tmjData: any, offsetX: number, offsetY: number, moduleInstanceId: string, tableMappings: Array<{ runtimeTableId: string; localSlotId: string }>) {
-    if (!this.tableRegistry) return;
-    const charAnchorsLayer = this.findObjectLayerInTMJ(tmjData.layers, 'character_anchors');
-    if (!charAnchorsLayer) return;
-
-    const getProps = (obj: any): Record<string, string | number | boolean> => {
-      const result: Record<string, string | number | boolean> = {};
-      for (const p of obj.properties || []) {
-        result[p.name] = p.value;
-      }
-      return result;
-    };
-
-    // Group by tableId (slot name)
-    const byTable = new Map<string, any[]>();
-    for (const obj of charAnchorsLayer) {
-      const props = getProps(obj);
-      const tableId = props.tableId as string;
-      if (!tableId) continue;
-      if (!byTable.has(tableId)) byTable.set(tableId, []);
-      byTable.get(tableId)!.push({ ...obj, props, x: obj.x + offsetX, y: obj.y + offsetY });
-    }
-
-    for (const [slotId, anchors] of byTable) {
-      // Find the runtimeTableId from the server's mapping
-      const mapping = tableMappings.find(t => t.localSlotId === slotId);
-      const runtimeId = mapping ? mapping.runtimeTableId : `${moduleInstanceId}_${slotId}`;
-
-      const find = (anchorType: string, role: string, position?: string, side?: string, seatIndex?: string) => {
-        const match = anchors.find((a: any) =>
-          a.props.anchorType === anchorType &&
-          a.props.role === role &&
-          (position === undefined || a.props.position === position) &&
-          (side === undefined || a.props.side === side) &&
-          (seatIndex === undefined || a.props.seatIndex === seatIndex)
-        );
-        if (match) return { x: match.x, y: match.y, direction: (match.props.direction as string) || 'down' };
-        return { x: 0, y: 0, direction: 'down' };
-      };
-
+    // Register table anchors in the table registry
+    const tableAnchors = this.arenaManager.getTableAnchors();
+    for (const [runtimeId, anchors] of tableAnchors) {
       this.tableRegistry.tables.set(runtimeId, {
         tableId: runtimeId,
-        playerTop: find('chess_seat', 'player', 'top'),
-        playerBottom: find('chess_seat', 'player', 'bottom'),
-        spectatorLeft01: find('chess_seat', 'spectator', undefined, 'left', '1'),
-        spectatorLeft02: find('chess_seat', 'spectator', undefined, 'left', '2'),
-        spectatorRight01: find('chess_seat', 'spectator', undefined, 'right', '1'),
-        spectatorRight02: find('chess_seat', 'spectator', undefined, 'right', '2'),
-        exitTop: find('chess_seat_exit', 'player', undefined, 'top'),
-        exitBottom: find('chess_seat_exit', 'player', undefined, 'bottom'),
-        exitLeft: find('chess_seat_exit', 'spectator', undefined, 'left'),
-        exitRight: find('chess_seat_exit', 'spectator', undefined, 'right'),
+        playerTop: anchors.playerTop,
+        playerBottom: anchors.playerBottom,
+        spectatorLeft01: anchors.spectatorLeft01,
+        spectatorLeft02: anchors.spectatorLeft02,
+        spectatorRight01: anchors.spectatorRight01,
+        spectatorRight02: anchors.spectatorRight02,
+        exitTop: anchors.exitTop,
+        exitBottom: anchors.exitBottom,
+        exitLeft: anchors.exitLeft,
+        exitRight: anchors.exitRight,
         cameraFocus: null,
         overlayArea: null,
       });
     }
   }
+
+  public removeArenaModules() {
+    if (this.arenaManager) {
+      // Get anchors before removing so we can delete them from registry
+      const tableAnchors = this.arenaManager.getTableAnchors();
+      for (const runtimeId of tableAnchors.keys()) {
+        this.tableRegistry.tables.delete(runtimeId);
+      }
+      this.arenaManager.removeAll();
+    }
+
+    // Restore bounds to current map
+    const tmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
+    if (tmjData) {
+      const mapWidth = tmjData.width * (tmjData.tilewidth || 32);
+      const mapHeight = tmjData.height * (tmjData.tileheight || 32);
+      this.matter.world.setBounds(0, 0, mapWidth, mapHeight);
+      this.cameraBounds = { x: 0, y: 0, w: mapWidth, h: mapHeight };
+      this.cameras.main.setBounds(0, 0, mapWidth, mapHeight);
+    }
+  }
+
+  public setDoorState(open: boolean) {
+    if (!this.arenaManager) {
+      this.arenaManager = new ArenaModuleManager(this);
+    }
+    this.arenaManager.setDoorOpen(open);
+  }
+
+  public initDoorSystem() {
+    const tmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
+    if (!tmjData) return;
+    if (!this.arenaManager) {
+      this.arenaManager = new ArenaModuleManager(this);
+    }
+    this.arenaManager.initDoorBlocker(tmjData);
+  }
+
 
   public async switchMap(mapPath: string, targetSpawnId: string) {
     this.movementLocked = true;
@@ -2392,6 +2115,11 @@ export class WorldScene extends Phaser.Scene {
     this.movementLocked = false;
 
     console.log('[WorldScene] switchMap complete:', mapKey, 'spawn:', targetSpawnId);
+
+    // Initialize door system for tournament reception
+    if (mapKey.includes('tournament_reception')) {
+      this.initDoorSystem();
+    }
   }
 
   private positionAtSpawn(tmjData: any, spawnId: string) {

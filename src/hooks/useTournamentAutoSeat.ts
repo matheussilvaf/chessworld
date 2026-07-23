@@ -1,8 +1,7 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { getWorldRoom } from '../game/network/colyseusClient';
 import type { TournamentState } from './useTournamentRoom';
-import type { Room } from 'colyseus.js';
 
 export function useTournamentAutoSeat(
   state: TournamentState,
@@ -14,6 +13,7 @@ export function useTournamentAutoSeat(
   const seating = useRef(false);
   const listenersAttached = useRef(false);
   const stateRef = useRef(state);
+  const seatRetryTimer = useRef<number | null>(null);
   stateRef.current = state;
 
   useEffect(() => {
@@ -22,9 +22,23 @@ export function useTournamentAutoSeat(
     if (state.currentRound === seatedForRound.current) return;
     if (seating.current) return;
     if (state.pairings.length === 0) return;
+    // Wait for modules to be loaded before seating
+    if (state.modules.length === 0) return;
 
     const room = getWorldRoom();
     if (!room) return;
+
+    // Check if arena modules are loaded in the scene
+    const scene = (window as any).__worldScene;
+    if (!scene || !scene.arenaManager || !scene.arenaManager.isLoaded) {
+      // Retry after a short delay
+      if (!seatRetryTimer.current) {
+        seatRetryTimer.current = window.setTimeout(() => {
+          seatRetryTimer.current = null;
+        }, 500);
+      }
+      return;
+    }
 
     const myPairing = state.pairings.find(
       p => p.whitePlayerId === user.id || p.blackPlayerId === user.id
@@ -58,15 +72,19 @@ export function useTournamentAutoSeat(
       listenersAttached.current = true;
 
       room.onMessage('tournament_seated', (msg: { boardId: string; color: string; seat: string }) => {
-        const scene = (window as any).__worldScene;
-        if (scene && typeof scene.seatPlayer === 'function') {
-          scene.seatPlayer(msg.boardId, 'player', msg.seat, msg.color);
-        }
+        seatPlayerWhenReady(msg.boardId, 'player', msg.seat, msg.color as 'w' | 'b');
+        seatedForRound.current = stateRef.current.currentRound;
+        seating.current = false;
+      });
+
+      room.onMessage('match_started', (msg: { matchId: string; boardId: string; color: string }) => {
+        const seat = msg.color === 'w' ? 'bottom' : 'top';
+        seatPlayerWhenReady(msg.boardId, 'player', seat, msg.color as 'w' | 'b');
         seatedForRound.current = stateRef.current.currentRound;
         seating.current = false;
       });
     }
-  }, [state.status, state.currentRound, state.pairings, user, connected]);
+  }, [state.status, state.currentRound, state.pairings, state.modules, user, connected]);
 
   // Report match result to coordinator
   useEffect(() => {
@@ -110,7 +128,6 @@ export function useTournamentAutoSeat(
       seatedForRound.current = 0;
       seating.current = false;
     }
-    // Unseat player when round ends
     if (state.status === 'between_rounds' || state.status === 'completed' || state.status === 'finalizing') {
       const scene = (window as any).__worldScene;
       if (scene && typeof scene.unseatPlayer === 'function' && scene.currentSeatInfo) {
@@ -119,4 +136,37 @@ export function useTournamentAutoSeat(
       seating.current = false;
     }
   }, [state.status]);
+
+  useEffect(() => {
+    return () => {
+      if (seatRetryTimer.current) {
+        clearTimeout(seatRetryTimer.current);
+      }
+    };
+  }, []);
+}
+
+function seatPlayerWhenReady(boardId: string, role: string, seat: string, color: 'w' | 'b') {
+  const scene = (window as any).__worldScene;
+  if (!scene) return;
+
+  // Check if the table is in the registry
+  if (scene.tableRegistry?.tables?.has(boardId)) {
+    scene.seatPlayer(boardId, role, seat, color);
+    return;
+  }
+
+  // Retry up to 10 times (5 seconds total)
+  let attempts = 0;
+  const retry = () => {
+    attempts++;
+    if (attempts > 10) return;
+    const s = (window as any).__worldScene;
+    if (s?.tableRegistry?.tables?.has(boardId)) {
+      s.seatPlayer(boardId, role, seat, color);
+    } else {
+      setTimeout(retry, 500);
+    }
+  };
+  setTimeout(retry, 500);
 }
