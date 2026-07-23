@@ -6,7 +6,6 @@ import type { TournamentState } from './useTournamentRoom';
 export function useTournamentAutoSeat(
   state: TournamentState,
   connected: boolean,
-  reportResult: (roundNumber: number, boardNumber: number, result: string, reason: string) => void,
 ) {
   const { user } = useAuthStore();
   const seatedForRound = useRef<number>(0);
@@ -81,43 +80,6 @@ export function useTournamentAutoSeat(
       });
     }
   }, [state.status, state.currentRound, state.pairings, state.modules, user, connected]);
-
-  // Report match result to coordinator
-  useEffect(() => {
-    if (!connected || !user) return;
-
-    const handleMatchEnded = (event: Event) => {
-      const detail = (event as CustomEvent).detail;
-      if (!detail || !detail.boardId) return;
-
-      const st = stateRef.current;
-      if (st.status !== 'round_active') return;
-
-      const myPairing = st.pairings.find(
-        p => p.runtimeTableId === detail.boardId &&
-             (p.whitePlayerId === user.id || p.blackPlayerId === user.id)
-      );
-      if (!myPairing) return;
-
-      let result: string;
-      if (detail.result === 'checkmate' || detail.result === 'resign' || detail.result === 'timeout' || detail.result === 'abandon') {
-        if (detail.winnerId === myPairing.whitePlayerId) {
-          result = '1-0';
-        } else if (detail.winnerId === myPairing.blackPlayerId) {
-          result = '0-1';
-        } else {
-          result = '1/2-1/2';
-        }
-      } else {
-        result = '1/2-1/2';
-      }
-
-      reportResult(st.currentRound, myPairing.boardNumber, result, detail.result || 'normal');
-    };
-
-    window.addEventListener('tournament_match_ended', handleMatchEnded);
-    return () => window.removeEventListener('tournament_match_ended', handleMatchEnded);
-  }, [connected, user, reportResult]);
 
   useEffect(() => {
     if (state.status === 'idle' || state.status === 'registration_open') {

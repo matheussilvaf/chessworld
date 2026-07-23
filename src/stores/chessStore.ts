@@ -45,6 +45,7 @@ interface ChessState {
   syncFromColyseus: (matchData: any) => void;
   selectSquare: (square: string) => void;
   makeMove: (from: string, to: string, promotion?: string) => void;
+  finishMatchFromServer: (payload: { matchId: string; boardId?: string; result: string; winnerId?: string }) => void;
   resign: () => void;
   closeBoard: () => void;
   reopenBoard: () => void;
@@ -285,14 +286,6 @@ export const useChessStore = create<ChessState>((set, get) => ({
       if (dbMatchId && playerColor === 'w') {
         updateDbMatchStatus(dbMatchId, 'finished', matchData.result || 'draw', matchData.winnerId || null, matchData.fen);
       }
-      // Emit tournament result event for reporting to coordinator
-      window.dispatchEvent(new CustomEvent('tournament_match_ended', {
-        detail: {
-          boardId: matchData.boardId,
-          result: matchData.result,
-          winnerId: matchData.winnerId,
-        }
-      }));
     }
 
     // Determine last move BEFORE loading the new FEN
@@ -412,6 +405,28 @@ export const useChessStore = create<ChessState>((set, get) => ({
       const userId = playerColor === 'w' ? get().whitePlayerId : get().blackPlayerId;
       saveMoveToDB(dbMatchId, updatedHistory.length, userId, from, to, moveResult.san, game.fen());
     }
+  },
+
+  finishMatchFromServer: (payload) => {
+    const { matchId, gameOver } = get();
+    if (!payload.matchId || payload.matchId !== matchId) return;
+    if (gameOver) return;
+
+    const result = payload.result || 'unknown';
+    if (result === 'checkmate') {
+      chessAudio.play('checkmate');
+    } else {
+      chessAudio.play('gameOver');
+    }
+
+    set({
+      gameOver: true,
+      result,
+      winnerId: payload.winnerId || null,
+      isMyTurn: false,
+      selectedSquare: null,
+      validMoves: [],
+    });
   },
 
   resign: () => {

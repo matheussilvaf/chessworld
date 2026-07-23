@@ -237,6 +237,10 @@ export class TournamentRoom extends Room<TournamentArenaState> {
     return Array.from(this.presentPlayers.values()).includes(playerId);
   }
 
+  public async syncFromCoordinator(): Promise<void> {
+    await this.syncState();
+  }
+
   private async syncState(): Promise<void> {
     try {
       const [current, lastCompleted, config] = await Promise.all([

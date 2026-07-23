@@ -4,13 +4,21 @@ import { computeAllHistories } from './tiebreaks.js';
 import type { Tournament, GameResult, RoundMode, Color } from './types.js';
 import { getEngineStatus } from './engine.js';
 
-// Reference to TournamentRoom for presence checks
-let tournamentRoomInstance: { isPlayerPresent(playerId: string): boolean } | null = null;
-export function setTournamentRoomInstance(room: { isPlayerPresent(playerId: string): boolean } | null) {
+// Reference to TournamentRoom for presence checks and sync
+let tournamentRoomInstance: { isPlayerPresent(playerId: string): boolean; syncFromCoordinator(): Promise<void> } | null = null;
+export function setTournamentRoomInstance(room: { isPlayerPresent(playerId: string): boolean; syncFromCoordinator(): Promise<void> } | null) {
   tournamentRoomInstance = room;
 }
 function getTournamentRoomInstance() {
   return tournamentRoomInstance;
+}
+
+async function notifyRoomSync(): Promise<void> {
+  try {
+    await tournamentRoomInstance?.syncFromCoordinator();
+  } catch (e) {
+    console.error('[Coordinator] notifyRoomSync error:', (e as Error).message);
+  }
 }
 
 // Reference to WorldRoom for checking if match is already active
@@ -437,7 +445,7 @@ async function checkPresenceDeadlines(instance: TournamentInstance): Promise<voi
       reason = 'forfeit';
     }
 
-    await db
+    const { data: updated } = await db
       .from('tournament_pairings')
       .update({
         result,
@@ -445,9 +453,17 @@ async function checkPresenceDeadlines(instance: TournamentInstance): Promise<voi
         completed_at: new Date().toISOString(),
       })
       .eq('id', p.id)
-      .is('result', null);
+      .is('result', null)
+      .select('id')
+      .maybeSingle();
 
     console.log(`[Coordinator] Forfeit on board ${p.board_number}: ${result}`);
+
+    if (updated) {
+      tryAdvanceRound(instance.id).catch(err =>
+        console.error('[Coordinator] tryAdvanceRound error after forfeit:', err.message)
+      );
+    }
   }
 }
 
@@ -501,6 +517,90 @@ async function transitionToCompleted(instance: TournamentInstance): Promise<void
   await atomicTransition(instance.id, 'finalizing', 'completed');
   console.log(`[Coordinator] Tournament ${instance.id} completed`);
   await ensureNextCycleExists();
+}
+
+async function tryAdvanceRound(tournamentId: string): Promise<void> {
+  const db = getClient();
+
+  const { data: inst } = await db
+    .from('tournament_instances')
+    .select('*')
+    .eq('id', tournamentId)
+    .maybeSingle();
+
+  if (!inst || inst.status !== 'round_active') return;
+
+  const instance = mapInstance(inst);
+
+  const { data: pairings } = await db
+    .from('tournament_pairings')
+    .select('*')
+    .eq('tournament_id', tournamentId)
+    .eq('round_number', instance.currentRound);
+
+  if (!pairings || pairings.length === 0) return;
+
+  const allComplete = pairings.every((p: any) => p.result !== null);
+  if (!allComplete) return;
+
+  if (!instance.swissTournamentId) return;
+  const swissT = await service.getTournament(instance.swissTournamentId);
+  if (!swissT) return;
+
+  for (const p of pairings) {
+    if (p.is_bye) continue;
+    if (!p.result) continue;
+
+    const round = swissT.rounds.find((r: any) => r.number === instance.currentRound);
+    if (!round) continue;
+
+    const pairing = round.pairings.find((pr: any) => pr.board === p.board_number);
+    if (!pairing || pairing.result) continue;
+
+    const isPlayed = !['forfeit', 'bye'].includes(p.result_reason || '');
+    await service.setResult(
+      instance.swissTournamentId,
+      instance.currentRound,
+      p.board_number,
+      p.result as GameResult,
+      isPlayed,
+    );
+  }
+
+  const finalizeResult = await service.finalizeRound(instance.swissTournamentId, instance.currentRound);
+  if (!finalizeResult.success) {
+    console.error('[Coordinator] tryAdvanceRound: finalize round failed:', finalizeResult.error);
+    return;
+  }
+
+  await saveStandings(instance.id, instance.swissTournamentId);
+
+  const { data: roundRow } = await db
+    .from('tournament_rounds')
+    .select('id')
+    .eq('tournament_id', instance.id)
+    .eq('round_number', instance.currentRound)
+    .maybeSingle();
+
+  if (roundRow) {
+    await db
+      .from('tournament_rounds')
+      .update({ status: 'completed', completed_at: new Date().toISOString() })
+      .eq('id', roundRow.id);
+  }
+
+  const swissT2 = await service.getTournament(instance.swissTournamentId);
+  const isFinished = swissT2 && swissT2.status === 'finished';
+
+  if (isFinished) {
+    await atomicTransition(instance.id, 'round_active', 'finalizing');
+    await transitionToCompleted({ ...instance, status: 'finalizing' } as TournamentInstance);
+  } else {
+    await atomicTransition(instance.id, 'round_active', 'between_rounds');
+    await transitionToNextRound({ ...instance, status: 'between_rounds' } as TournamentInstance);
+  }
+
+  await notifyRoomSync();
 }
 
 // --- Arena layout computation ---
@@ -955,6 +1055,12 @@ export async function reportMatchResult(
     .is('result', null)
     .select('id')
     .maybeSingle();
+
+  if (data) {
+    tryAdvanceRound(tournamentId).catch(err =>
+      console.error('[Coordinator] tryAdvanceRound error after reportMatchResult:', err.message)
+    );
+  }
 
   return !!data;
 }

@@ -77,7 +77,7 @@ const STANDINGS_BASE_HEIGHT = 380;
 
 export function TournamentPanelOverlays() {
   const { user } = useAuthStore();
-  const { state, connected, connect, register, unregister, reportResult } = useTournamentRoom();
+  const { state, connected, connect, register, unregister } = useTournamentRoom();
   const [panelRects, setPanelRects] = useState<{ registry?: PanelRect; standings?: PanelRect } | null>(null);
   const [inReception, setInReception] = useState(false);
   const prevDoorOpen = useRef(false);
@@ -156,7 +156,7 @@ export function TournamentPanelOverlays() {
     }
   }, [state.doorOpen, state.modules, state.status, inReception, connected]);
 
-  useTournamentAutoSeat(state, connected, reportResult);
+  useTournamentAutoSeat(state, connected);
 
   if (!panelRects || !connected) return null;
   if (state.status === 'idle' && !state.startsAt) return null;

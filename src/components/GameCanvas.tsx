@@ -468,7 +468,7 @@ export function GameCanvas() {
 
     room.onMessage('match_finished', (data: any) => {
       useGameStore.getState().setLastEvent(`match_finished: ${data.result}`);
-      useChessStore.getState().syncFromColyseus(data);
+      useChessStore.getState().finishMatchFromServer(data);
       setTimeout(() => {
         if (gameRef.current) {
           const worldScene = getWorldScene(gameRef.current);
