@@ -164,7 +164,13 @@ export function sendChessMove(matchId: string, from: string, to: string, promoti
 }
 
 export function sendResign(matchId: string) {
-  getActiveRoom()?.send('chess_resign', { matchId });
+  const room = getActiveRoom();
+  console.log(`[Colyseus] sendResign: matchId=${matchId}, activeRoomType=${activeRoomType}, room=${room?.roomId || 'null'}`);
+  if (!room) {
+    console.error('[Colyseus] sendResign: no active room available!');
+    return;
+  }
+  room.send('chess_resign', { matchId });
 }
 
 export function sendDrawOffer(matchId: string) {

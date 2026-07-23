@@ -63,6 +63,7 @@ export function useTournamentAutoSeat(
       p => p.roundNumber === state.currentRound &&
         !p.isBye &&
         !p.result &&
+        !p.completedAt &&
         (p.whitePlayerId === user.id || p.blackPlayerId === user.id)
     );
     if (!myPairing) {

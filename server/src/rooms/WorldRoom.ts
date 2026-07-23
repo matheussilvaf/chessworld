@@ -232,29 +232,37 @@ export class WorldRoom extends Room<WorldState> {
 
     this.onMessage('chess_resign', async (client, data) => {
       const { matchId } = data as { matchId: string };
+      console.log(`[WorldRoom] chess_resign received from ${client.sessionId} for match ${matchId}`);
       const player = this.state.players.get(client.sessionId);
-      if (!player) return;
+      if (!player) {
+        console.log(`[WorldRoom] chess_resign: player not found for session ${client.sessionId}`);
+        return;
+      }
 
       const match = this.state.matches.get(matchId);
-      if (!match || match.status !== 'playing') return;
+      if (!match || match.status !== 'playing') {
+        console.log(`[WorldRoom] chess_resign: match not found or not playing. match=${!!match}, status=${match?.status}`);
+        return;
+      }
 
       const isWhite = match.whitePlayerId === player.id;
       const isBlack = match.blackPlayerId === player.id;
-      if (!isWhite && !isBlack) return;
+      if (!isWhite && !isBlack) {
+        console.log(`[WorldRoom] chess_resign: player ${player.id} is not a participant in match ${matchId}`);
+        return;
+      }
 
       match.status = 'finished';
       match.result = 'resign';
       match.winnerId = isWhite ? match.blackPlayerId : match.whitePlayerId;
       activeGames.delete(matchId);
 
-      this.broadcast('match_finished', {
-        matchId: match.id,
-        boardId: match.boardId,
-        result: match.result,
-        winnerId: match.winnerId,
-      });
+      this.broadcastMatchEnd(match);
       this.cleanupMatchBoard(match);
       await this.reportTournamentResult(match);
+
+      this.state.matches.delete(matchId);
+      console.log(`[WorldRoom] chess_resign: match ${matchId} finished and removed from state`);
     });
 
     this.onMessage('chess_draw_offer', (client, data) => {
@@ -506,6 +514,7 @@ export class WorldRoom extends Room<WorldState> {
 
       for (const match of abandonedMatches) {
         await this.reportTournamentResult(match);
+        this.state.matches.delete(match.id);
       }
 
       this.state.voiceParticipants.delete(client.sessionId);
@@ -562,6 +571,7 @@ export class WorldRoom extends Room<WorldState> {
     });
     for (const match of timedOutMatches) {
       this.reportTournamentResult(match);
+      this.state.matches.delete(match.id);
     }
   }
 
@@ -804,6 +814,7 @@ export class WorldRoom extends Room<WorldState> {
     this.broadcastMatchEnd(match);
     this.cleanupMatchBoard(match);
     await this.reportTournamentResult(match);
+    this.state.matches.delete(matchId);
   }
 
   private getSpectators(boardId: string): Set<string> {
