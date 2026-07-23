@@ -25,7 +25,7 @@ export function GameCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
   const sceneReadyRef = useRef(false);
-  const listenersSetRef = useRef(false);
+  const attachedRoomIdRef = useRef<string | null>(null);
   const transitionInProgressRef = useRef(false);
   const { setSelectedBoard } = useGameStore();
   const { user, profile } = useAuthStore();
@@ -198,7 +198,7 @@ export function GameCanvas() {
     setTimeout(setupScene, 500);
 
     return () => {
-      listenersSetRef.current = false;
+      attachedRoomIdRef.current = null;
       sceneReadyRef.current = false;
       if (gameRef.current) {
         gameRef.current.destroy(true);
@@ -243,7 +243,7 @@ export function GameCanvas() {
   }, []);
 
   function attemptListenerSetup() {
-    if (!sceneReadyRef.current || !gameRef.current || listenersSetRef.current) return;
+    if (!sceneReadyRef.current || !gameRef.current) return;
     const scene = getWorldScene(gameRef.current);
     if (scene) {
       tryAttachListeners(scene);
@@ -251,10 +251,9 @@ export function GameCanvas() {
   }
 
   function tryAttachListeners(scene: WorldScene) {
-    if (listenersSetRef.current) return;
-
     const room = getActiveRoom();
     if (!room) return;
+    if (attachedRoomIdRef.current === room.roomId) return;
 
     if (!room.state) {
       useGameStore.getState().setLastEvent('state null - waiting');
@@ -268,7 +267,7 @@ export function GameCanvas() {
   }
 
   function validateAndAttach(scene: WorldScene, room: Room<any>) {
-    if (listenersSetRef.current) return;
+    if (attachedRoomIdRef.current === room.roomId) return;
 
     const state = room.state;
     const playersOk = state && state.players && typeof state.players.onAdd === 'function';
@@ -301,7 +300,7 @@ export function GameCanvas() {
 
     try {
       // 1. Reset listener flag
-      listenersSetRef.current = false;
+      attachedRoomIdRef.current = null;
 
       // 2. Destroy all remote players from the old room
       scene.destroyAllRemotePlayers();
@@ -355,8 +354,8 @@ export function GameCanvas() {
   }
 
   function attachListeners(scene: WorldScene, room: Room<any>) {
-    if (listenersSetRef.current) return;
-    listenersSetRef.current = true;
+    if (attachedRoomIdRef.current === room.roomId) return;
+    attachedRoomIdRef.current = room.roomId;
 
     const state = room.state;
     console.log('[Colyseus] Attaching listeners. players:', state.players.size, '| boards:', state.boards.size);
