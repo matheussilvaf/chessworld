@@ -554,15 +554,28 @@ export class WorldRoom extends Room<WorldState> {
 
   private async reportTournamentResult(match: MatchState) {
     const boardId = match.boardId;
-    if (!boardId || !boardId.includes('_table_')) return;
+    if (!boardId || !boardId.includes('_table_')) {
+      console.log(`[WorldRoom] Not a tournament board: ${boardId}`);
+      return;
+    }
 
     try {
       const instance = await coordinator.getCurrentInstance();
-      if (!instance || instance.status !== 'round_active') return;
+      if (!instance || instance.status !== 'round_active') {
+        console.log(`[WorldRoom] No active tournament or not round_active: ${instance?.status}`);
+        return;
+      }
 
       const pairings = await coordinator.getPairings(instance.id, instance.currentRound);
       const pairing = pairings.find(p => p.runtimeTableId === boardId);
-      if (!pairing || pairing.result) return;
+      if (!pairing) {
+        console.log(`[WorldRoom] No pairing found for boardId: ${boardId}, available:`, pairings.map(p => p.runtimeTableId));
+        return;
+      }
+      if (pairing.result) {
+        console.log(`[WorldRoom] Pairing already has result: ${pairing.result}`);
+        return;
+      }
 
       let result: string;
       if (match.result === 'checkmate' || match.result === 'resign' || match.result === 'timeout' || match.result === 'abandon') {
@@ -577,8 +590,8 @@ export class WorldRoom extends Room<WorldState> {
         result = '1/2-1/2';
       }
 
-      await coordinator.reportMatchResult(instance.id, instance.currentRound, pairing.boardNumber, result, match.result || 'normal');
-      console.log(`[WorldRoom] Tournament result reported: board ${pairing.boardNumber} = ${result} (${match.result})`);
+      const reported = await coordinator.reportMatchResult(instance.id, instance.currentRound, pairing.boardNumber, result, match.result || 'normal');
+      console.log(`[WorldRoom] Tournament result reported: board ${pairing.boardNumber} = ${result} (${match.result}), success=${reported}`);
     } catch (err: any) {
       console.error(`[WorldRoom] Failed to report tournament result:`, err.message);
     }
