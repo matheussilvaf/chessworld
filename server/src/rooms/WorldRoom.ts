@@ -7,6 +7,7 @@ import { BoardState } from '../schemas/BoardState.js';
 import { MatchState } from '../schemas/MatchState.js';
 import { VoiceParticipantState } from '../schemas/VoiceParticipantState.js';
 import * as coordinator from '../tournament/coordinator.js';
+import type { TournamentMatchCreateParams, TournamentMatchFinishParams } from '../tournament/coordinator.js';
 
 interface JoinOptions {
   playerId: string;
@@ -606,6 +607,21 @@ export class WorldRoom extends Room<WorldState> {
       const reported = await coordinator.reportMatchResult(instance.id, instance.currentRound, pairing.boardNumber, result, match.result || 'normal');
       console.log(`[WorldRoom] Tournament result reported: board ${pairing.boardNumber} = ${result} (${match.result}), success=${reported}`);
 
+      // Persist finished match state to database
+      const finishParams: TournamentMatchFinishParams = {
+        colyseusMatchId: match.id,
+        status: 'finished',
+        result: match.result || 'draw',
+        tournamentScore: result,
+        winnerId: match.winnerId || null,
+        fen: match.fen,
+        pgn: match.pgn || '',
+        turn: match.turn,
+        whiteTimeMs: match.whiteTimeMs,
+        blackTimeMs: match.blackTimeMs,
+      };
+      coordinator.finishTournamentMatch(finishParams);
+
       // Update player profile stats (wins/losses/draws/rating)
       if (reported && pairing.whitePlayerId && pairing.blackPlayerId) {
         await coordinator.updateProfileStats(pairing.whitePlayerId, pairing.blackPlayerId, result);
@@ -699,6 +715,33 @@ export class WorldRoom extends Room<WorldState> {
         coordinator.clearPresenceDeadline(instance.id, board.id);
       }
     }).catch(() => {});
+
+    // Persist tournament match to database
+    if (board.id.includes('_table_')) {
+      coordinator.getCurrentInstance().then(async (instance) => {
+        if (!instance || instance.status !== 'round_active') return;
+        const pairings = await coordinator.getPairings(instance.id, instance.currentRound);
+        const pairing = pairings.find(p => p.runtimeTableId === board.id);
+        if (!pairing) return;
+
+        const params: TournamentMatchCreateParams = {
+          colyseusMatchId: matchId,
+          tournamentId: instance.id,
+          roundNumber: instance.currentRound,
+          boardNumber: pairing.boardNumber,
+          runtimeTableId: board.id,
+          whiteUserId: whiteId,
+          blackUserId: blackId,
+          region: joiningPlayer.region,
+          fen: chess.fen(),
+          timeMinutes: board.baseMinutes,
+          incrementSeconds: board.incrementSeconds,
+          whiteTimeMs: baseTimeMs,
+          blackTimeMs: baseTimeMs,
+        };
+        coordinator.createTournamentMatch(params);
+      }).catch(err => console.error('[WorldRoom] createTournamentMatch error:', err.message));
+    }
 
     console.log(`[WorldRoom] Match started: ${matchId} (${whitePlayerName} vs ${blackPlayerName}) on ${board.name}`);
   }

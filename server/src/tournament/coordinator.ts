@@ -1141,3 +1141,105 @@ export async function updateProfileStats(whitePlayerId: string, blackPlayerId: s
     console.error('[Coordinator] updateProfileStats error:', err.message);
   }
 }
+
+export interface TournamentMatchCreateParams {
+  colyseusMatchId: string;
+  tournamentId: string;
+  roundNumber: number;
+  boardNumber: number;
+  runtimeTableId: string;
+  whiteUserId: string;
+  blackUserId: string;
+  region: string;
+  fen: string;
+  timeMinutes: number;
+  incrementSeconds: number;
+  whiteTimeMs: number;
+  blackTimeMs: number;
+}
+
+export async function createTournamentMatch(params: TournamentMatchCreateParams): Promise<string | null> {
+  try {
+    const db = getClient();
+    const { data, error } = await db
+      .from('matches')
+      .upsert(
+        {
+          colyseus_match_id: params.colyseusMatchId,
+          tournament_id: params.tournamentId,
+          tournament_round: params.roundNumber,
+          tournament_board_number: params.boardNumber,
+          runtime_table_id: params.runtimeTableId,
+          board_id: null,
+          white_user_id: params.whiteUserId,
+          black_user_id: params.blackUserId,
+          region: params.region,
+          current_fen: params.fen,
+          pgn: '',
+          status: 'playing',
+          turn: 'w',
+          time_minutes: params.timeMinutes,
+          increment_seconds: params.incrementSeconds,
+          white_time_ms: params.whiteTimeMs,
+          black_time_ms: params.blackTimeMs,
+          last_move_at: new Date().toISOString(),
+        },
+        { onConflict: 'colyseus_match_id', ignoreDuplicates: false }
+      )
+      .select('id')
+      .maybeSingle();
+
+    if (error) {
+      console.error('[Coordinator] createTournamentMatch error:', error.message);
+      return null;
+    }
+    console.log(`[Coordinator] Tournament match persisted: colyseus=${params.colyseusMatchId}, db=${data?.id}`);
+    return data?.id || null;
+  } catch (err: any) {
+    console.error('[Coordinator] createTournamentMatch exception:', err.message);
+    return null;
+  }
+}
+
+export interface TournamentMatchFinishParams {
+  colyseusMatchId: string;
+  status: string;
+  result: string;
+  tournamentScore: string | null;
+  winnerId: string | null;
+  fen: string;
+  pgn: string;
+  turn: string;
+  whiteTimeMs: number;
+  blackTimeMs: number;
+}
+
+export async function finishTournamentMatch(params: TournamentMatchFinishParams): Promise<void> {
+  try {
+    const db = getClient();
+    const { error } = await db
+      .from('matches')
+      .update({
+        status: params.status,
+        result: params.result,
+        tournament_score: params.tournamentScore,
+        winner_user_id: params.winnerId,
+        current_fen: params.fen,
+        pgn: params.pgn,
+        turn: params.turn,
+        white_time_ms: params.whiteTimeMs,
+        black_time_ms: params.blackTimeMs,
+        finished_at: new Date().toISOString(),
+      })
+      .eq('colyseus_match_id', params.colyseusMatchId);
+
+    if (error) {
+      console.error('[Coordinator] finishTournamentMatch error:', error.message);
+    } else {
+      console.log(`[Coordinator] Tournament match finished: colyseus=${params.colyseusMatchId}, result=${params.result}`);
+    }
+  } catch (err: any) {
+    console.error('[Coordinator] finishTournamentMatch exception:', err.message);
+  }
+}
+

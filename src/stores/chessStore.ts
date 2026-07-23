@@ -184,8 +184,9 @@ export const useChessStore = create<ChessState>((set, get) => ({
       dbMatchId: null,
     });
 
-    // Create the DB match record (fire and forget)
-    if (color === 'w' && matchData?.whitePlayerId && matchData?.blackPlayerId) {
+    // Create the DB match record (fire and forget) — skip for tournament tables (server persists those)
+    const isTournamentTable = boardId && typeof boardId === 'string' && boardId.includes('_table_');
+    if (!isTournamentTable && color === 'w' && matchData?.whitePlayerId && matchData?.blackPlayerId) {
       const timeMinutes = matchData?.whiteTimeMs ? Math.round(matchData.whiteTimeMs / 60000) : 10;
       const incrementSec = matchData?.incrementMs ? Math.round(matchData.incrementMs / 1000) : 0;
       createDbMatch(
