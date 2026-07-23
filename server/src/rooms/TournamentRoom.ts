@@ -284,6 +284,12 @@ export class TournamentRoom extends Room<TournamentArenaState> {
         if (current.status !== 'registration_open') {
           const standings = await coordinator.getStandings(current.id);
           this.syncStandings(standings);
+        } else if (lastCompleted && lastCompleted.status === 'completed') {
+          const standings = await coordinator.getStandings(lastCompleted.id);
+          this.syncStandings(standings);
+          this.state.lastStatus = 'completed';
+        } else {
+          this.state.standings.clear();
         }
       } else {
         this.state.status = 'idle';

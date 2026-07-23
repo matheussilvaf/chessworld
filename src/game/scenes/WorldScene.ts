@@ -1829,6 +1829,77 @@ export class WorldScene extends Phaser.Scene {
     this.cameraFollowing = true;
   }
 
+  public unseatPlayerToReception() {
+    if (!this.currentSeatInfo && !this.movementLocked) return;
+    this.currentSeatInfo = null;
+
+    if (this.seatTween) {
+      this.seatTween.stop();
+      this.seatTween = null;
+    }
+
+    const charDef = getCharacter();
+    this.player.setTexture(charDef.id);
+    this.player.setRotation(0);
+    this.player.setFrame(getIdleFrame(this.currentDirection));
+
+    const pos = this.findRandomWalkablePosition();
+    const targetBodyX = pos.x + this.playerFeetOffsetX;
+    const targetBodyY = pos.y + this.playerFeetOffset;
+
+    this.player.setAlpha(0);
+    this.matter.body.setPosition(this.playerBody, { x: targetBodyX, y: targetBodyY });
+    this.player.x = Math.round(pos.x);
+    this.player.y = Math.round(pos.y);
+
+    this.tweens.add({
+      targets: this.player,
+      alpha: 1,
+      duration: 400,
+      ease: 'Power2',
+      onComplete: () => {
+        this.currentDirection = 'down';
+        this.player.anims.stop();
+        this.player.setFrame(getIdleFrame(this.currentDirection));
+        this.seatTween = null;
+        this.matter.body.setStatic(this.playerBody, false);
+        this.matter.body.setVelocity(this.playerBody, { x: 0, y: 0 });
+        this.restorePhysics();
+        this.unlockMovement();
+        this.emitMovement(false, this.currentDirection);
+      },
+    });
+    this.targetZoom = this.defaultZoom;
+    this.cameraFollowing = true;
+  }
+
+  private findRandomWalkablePosition(): { x: number; y: number } {
+    const tmjData = this.cache.tilemap.get(this.currentMapKey)?.data;
+    if (!tmjData) return { x: 400, y: 400 };
+
+    const mapWidth = tmjData.width * (tmjData.tilewidth || 32);
+    const mapHeight = tmjData.height * (tmjData.tileheight || 32);
+    const margin = 80;
+
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const x = margin + Math.random() * (mapWidth - margin * 2);
+      const y = margin + Math.random() * (mapHeight - margin * 2);
+
+      let collides = false;
+      for (const rect of this.collisionRects) {
+        if (x >= rect.x && x <= rect.x + rect.width &&
+            y >= rect.y && y <= rect.y + rect.height) {
+          collides = true;
+          break;
+        }
+      }
+      if (!collides) {
+        return { x, y };
+      }
+    }
+    return { x: mapWidth / 2, y: mapHeight / 2 };
+  }
+
   private restorePhysics() {
     if (this.savedCollisionFilter) {
       this.matter.body.set(this.playerBody, {

@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { Trophy, Crown, Medal, Award, Swords } from 'lucide-react';
 import type { TournamentState } from '../../hooks/useTournamentRoom';
 
@@ -11,6 +12,27 @@ export function TournamentStandingsPanel({ state }: TournamentStandingsPanelProp
   const isCompleted = state.status === 'completed' || state.lastStatus === 'completed';
   const isCancelled = state.status === 'cancelled_insufficient_players' || state.lastStatus === 'cancelled_insufficient_players';
 
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!isRegistrationOpen || !state.startsAt || !state.serverNow) {
+      setSecondsLeft(null);
+      return;
+    }
+    const serverOffset = Date.now() - new Date(state.serverNow).getTime();
+    const update = () => {
+      const now = Date.now() - serverOffset;
+      const diff = Math.max(0, Math.ceil((new Date(state.startsAt).getTime() - now) / 1000));
+      setSecondsLeft(diff);
+    };
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [isRegistrationOpen, state.startsAt, state.serverNow]);
+
+  const showRegistrations = isRegistrationOpen && secondsLeft !== null && secondsLeft <= 10;
+  const showPreviousStandings = isRegistrationOpen && !showRegistrations && state.standings.length > 0;
+
   if (isCancelled && !isActive && !isRegistrationOpen) {
     return (
       <div className="w-full h-full flex flex-col">
@@ -21,14 +43,14 @@ export function TournamentStandingsPanel({ state }: TournamentStandingsPanelProp
         </div>
         <div className="flex-1 flex items-center justify-center p-4">
           <p className="text-sm text-slate-500 text-center">
-            Não houve participantes suficientes
+            Nao houve participantes suficientes
           </p>
         </div>
       </div>
     );
   }
 
-  if (isRegistrationOpen) {
+  if (showRegistrations) {
     return (
       <div className="w-full h-full flex flex-col">
         <div className="p-4 border-b border-slate-700/50">
@@ -55,10 +77,34 @@ export function TournamentStandingsPanel({ state }: TournamentStandingsPanelProp
     );
   }
 
+  if (showPreviousStandings) {
+    return (
+      <div className="w-full h-full flex flex-col">
+        <div className="p-4 border-b border-slate-700/50 flex items-center gap-2">
+          <Trophy className="w-4 h-4 text-amber-400" />
+          <h3 className="text-sm font-semibold text-slate-300 tracking-wide uppercase">
+            Ultimo Torneio
+          </h3>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          <StandingsList standings={state.standings} />
+        </div>
+      </div>
+    );
+  }
+
+  if (isRegistrationOpen) {
+    return (
+      <div className="w-full h-full flex items-center justify-center">
+        <p className="text-xs text-slate-500">Aguardando torneio</p>
+      </div>
+    );
+  }
+
   if (isActive || isCompleted) {
     const standings = state.standings;
     const pairings = state.pairings;
-    const title = isCompleted ? 'Classificação Final' : 'Standings';
+    const title = isCompleted ? 'Classificacao Final' : 'Standings';
 
     return (
       <div className="w-full h-full flex flex-col">
@@ -72,7 +118,6 @@ export function TournamentStandingsPanel({ state }: TournamentStandingsPanelProp
           )}
         </div>
 
-        {/* Show pairings when round is active */}
         {isActive && pairings.length > 0 && (
           <div className="border-b border-slate-700/50">
             <div className="px-4 py-2 flex items-center gap-1.5">
@@ -120,39 +165,7 @@ export function TournamentStandingsPanel({ state }: TournamentStandingsPanelProp
               {state.status === 'starting' ? 'Calculando pareamentos...' : 'Aguardando resultados'}
             </p>
           ) : (
-            <div className="divide-y divide-slate-800/50">
-              {standings.map((s) => (
-                <div
-                  key={s.playerId}
-                  className={`flex items-center gap-2 px-3 py-2 ${
-                    s.isChampion ? 'bg-amber-500/5' : 'hover:bg-slate-800/30'
-                  }`}
-                >
-                  <div className="w-6 flex items-center justify-center">
-                    {s.position === 1 ? (
-                      <Crown className="w-4 h-4 text-amber-400" />
-                    ) : s.position === 2 ? (
-                      <Medal className="w-3.5 h-3.5 text-slate-300" />
-                    ) : s.position === 3 ? (
-                      <Award className="w-3.5 h-3.5 text-amber-700" />
-                    ) : (
-                      <span className="text-xs text-slate-500">{s.position}</span>
-                    )}
-                  </div>
-                  <span className={`text-sm flex-1 truncate ${s.isChampion ? 'text-amber-200 font-medium' : 'text-slate-200'}`}>
-                    {s.username}
-                  </span>
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-white font-mono w-8 text-right">
-                      {s.points}
-                    </span>
-                    <span className="text-[10px] text-slate-500 font-mono w-16 text-right hidden sm:block">
-                      {s.wins}W {s.draws}D {s.losses}L
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <StandingsList standings={standings} />
           )}
         </div>
       </div>
@@ -162,6 +175,44 @@ export function TournamentStandingsPanel({ state }: TournamentStandingsPanelProp
   return (
     <div className="w-full h-full flex items-center justify-center">
       <p className="text-xs text-slate-500">Aguardando torneio</p>
+    </div>
+  );
+}
+
+function StandingsList({ standings }: { standings: TournamentState['standings'] }) {
+  return (
+    <div className="divide-y divide-slate-800/50">
+      {standings.map((s) => (
+        <div
+          key={s.playerId}
+          className={`flex items-center gap-2 px-3 py-2 ${
+            s.isChampion ? 'bg-amber-500/5' : 'hover:bg-slate-800/30'
+          }`}
+        >
+          <div className="w-6 flex items-center justify-center">
+            {s.position === 1 ? (
+              <Crown className="w-4 h-4 text-amber-400" />
+            ) : s.position === 2 ? (
+              <Medal className="w-3.5 h-3.5 text-slate-300" />
+            ) : s.position === 3 ? (
+              <Award className="w-3.5 h-3.5 text-amber-700" />
+            ) : (
+              <span className="text-xs text-slate-500">{s.position}</span>
+            )}
+          </div>
+          <span className={`text-sm flex-1 truncate ${s.isChampion ? 'text-amber-200 font-medium' : 'text-slate-200'}`}>
+            {s.username}
+          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium text-white font-mono w-8 text-right">
+              {s.points}
+            </span>
+            <span className="text-[10px] text-slate-500 font-mono w-16 text-right hidden sm:block">
+              {s.wins}W {s.draws}D {s.losses}L
+            </span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

@@ -125,10 +125,21 @@ export function useTournamentAutoSeat(
       seatedForRound.current = 0;
       seating.current = false;
     }
-    if (state.status === 'between_rounds' || state.status === 'completed' || state.status === 'finalizing') {
+    if (state.status === 'between_rounds') {
       const scene = (window as any).__worldScene;
       if (scene && typeof scene.unseatPlayer === 'function' && scene.currentSeatInfo) {
         scene.unseatPlayer();
+      }
+      seating.current = false;
+    }
+    if (state.status === 'completed' || state.status === 'finalizing') {
+      const scene = (window as any).__worldScene;
+      if (scene && scene.currentSeatInfo) {
+        if (typeof scene.unseatPlayerToReception === 'function') {
+          scene.unseatPlayerToReception();
+        } else if (typeof scene.unseatPlayer === 'function') {
+          scene.unseatPlayer();
+        }
       }
       seating.current = false;
     }
