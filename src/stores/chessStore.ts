@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { Chess } from 'chess.js';
-import { sendChessMove, sendResign, getWorldRoom } from '../game/network/colyseusClient';
+import { sendChessMove, sendResign, getActiveRoom } from '../game/network/colyseusClient';
 import { chessAudio, getSoundForSan } from '../game/audio/chessAudio';
 import { supabase } from '../lib/supabase';
 
@@ -142,7 +142,7 @@ export const useChessStore = create<ChessState>((set, get) => ({
   dbMatchId: null,
 
   openMatch: (matchId, color, _userId, boardIdArg) => {
-    const room = getWorldRoom();
+    const room = getActiveRoom();
     let matchData: any = null;
     if (room?.state?.matches) {
       room.state.matches.forEach((m: any, id: string) => {
@@ -216,7 +216,7 @@ export const useChessStore = create<ChessState>((set, get) => ({
   },
 
   openSpectate: (matchId) => {
-    const room = getWorldRoom();
+    const room = getActiveRoom();
     if (!room?.state?.matches) return;
 
     let matchData: any = null;

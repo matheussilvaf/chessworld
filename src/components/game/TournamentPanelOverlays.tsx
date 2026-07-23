@@ -134,30 +134,59 @@ export function TournamentPanelOverlays() {
       }
     }
 
-    const modulesKey = JSON.stringify(state.modules);
-    const canLoadArena = state.status === 'starting' || state.status === 'round_active' || state.status === 'between_rounds';
     const shouldDismount = state.status === 'finalizing' || state.status === 'completed'
       || state.status === 'registration_open' || state.status === 'idle'
-      || state.status === 'cancelled_insufficient_players';
+      || state.status === 'cancelled_insufficient_players' || state.status === 'starting';
 
     if (shouldDismount) {
-      if (prevModules.current !== '[]' && prevModules.current !== '') {
-        prevModules.current = '[]';
+      if (prevModules.current !== '') {
+        prevModules.current = '';
         if (typeof scene.removeArenaModules === 'function') {
           scene.removeArenaModules();
         }
       }
-    } else if (canLoadArena && modulesKey !== prevModules.current && state.modules.length > 0) {
-      prevModules.current = modulesKey;
-      if (typeof scene.loadArenaModules === 'function') {
-        try {
-          scene.loadArenaModules(state.modules, state.tables);
-        } catch (err) {
-          console.error('[TournamentPanelOverlays] loadArenaModules error:', err);
+      return;
+    }
+
+    if (state.status !== 'round_active' && state.status !== 'between_rounds') return;
+
+    const layoutKey = JSON.stringify({ modules: state.modules, tables: state.tables });
+
+    if (state.status === 'between_rounds') {
+      if (prevModules.current === '' && state.modules.length > 0 && state.tables.length > 0) {
+        prevModules.current = layoutKey;
+        if (typeof scene.loadArenaModules === 'function') {
+          try { scene.loadArenaModules(state.modules, state.tables); } catch (err) {
+            console.error('[TournamentPanelOverlays] loadArenaModules error:', err);
+          }
         }
       }
+      return;
     }
-  }, [state.doorOpen, state.modules, state.status, inReception, connected]);
+
+    if (layoutKey === prevModules.current) return;
+    if (state.currentRound <= 0) return;
+    if (state.modules.length === 0 || state.tables.length === 0) return;
+
+    const currentPairings = state.pairings.filter(p => p.roundNumber === state.currentRound && !p.isBye);
+    if (currentPairings.length === 0) return;
+
+    const allHaveRuntime = currentPairings.every(p => !!p.runtimeTableId);
+    if (!allHaveRuntime) return;
+
+    const tableSet = new Set(state.tables.map(t => t.runtimeTableId));
+    const allInTables = currentPairings.every(p => tableSet.has(p.runtimeTableId));
+    if (!allInTables) return;
+
+    prevModules.current = layoutKey;
+    if (typeof scene.loadArenaModules === 'function') {
+      try {
+        scene.loadArenaModules(state.modules, state.tables);
+      } catch (err) {
+        console.error('[TournamentPanelOverlays] loadArenaModules error:', err);
+      }
+    }
+  }, [state.doorOpen, state.modules, state.tables, state.pairings, state.currentRound, state.status, inReception, connected]);
 
   useTournamentAutoSeat(state, connected);
 

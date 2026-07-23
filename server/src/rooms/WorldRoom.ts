@@ -230,7 +230,7 @@ export class WorldRoom extends Room<WorldState> {
       }
     });
 
-    this.onMessage('chess_resign', (client, data) => {
+    this.onMessage('chess_resign', async (client, data) => {
       const { matchId } = data as { matchId: string };
       const player = this.state.players.get(client.sessionId);
       if (!player) return;
@@ -247,8 +247,14 @@ export class WorldRoom extends Room<WorldState> {
       match.winnerId = isWhite ? match.blackPlayerId : match.whitePlayerId;
       activeGames.delete(matchId);
 
-      this.broadcastMatchEnd(match);
+      this.broadcast('match_finished', {
+        matchId: match.id,
+        boardId: match.boardId,
+        result: match.result,
+        winnerId: match.winnerId,
+      });
       this.cleanupMatchBoard(match);
+      await this.reportTournamentResult(match);
     });
 
     this.onMessage('chess_draw_offer', (client, data) => {
@@ -271,7 +277,7 @@ export class WorldRoom extends Room<WorldState> {
       }
     });
 
-    this.onMessage('chess_draw_accept', (client, data) => {
+    this.onMessage('chess_draw_accept', async (client, data) => {
       const { matchId } = data as { matchId: string };
       const player = this.state.players.get(client.sessionId);
       if (!player) return;
@@ -290,6 +296,7 @@ export class WorldRoom extends Room<WorldState> {
 
       this.broadcastMatchEnd(match);
       this.cleanupMatchBoard(match);
+      await this.reportTournamentResult(match);
     });
 
     this.onMessage('chat', (client, data) => {
@@ -366,6 +373,8 @@ export class WorldRoom extends Room<WorldState> {
         const match = this.state.matches.get(board.matchId);
         if (match && (match.whitePlayerId === player.id || match.blackPlayerId === player.id)) {
           const myColor = match.whitePlayerId === player.id ? 'w' : 'b';
+          const seat = myColor === 'w' ? 'bottom' : 'top';
+          client.send('tournament_seated', { boardId, color: myColor, seat });
           client.send('match_started', { matchId: board.matchId, boardId, color: myColor });
           return;
         }
@@ -397,6 +406,21 @@ export class WorldRoom extends Room<WorldState> {
       // Second player: start the match
       if (board.status === 'waiting' && board.waitingPlayerId !== player.id) {
         player.currentBoardId = boardId;
+
+        // Send tournament_seated to the second player (joiner)
+        const joinerColor = board.whitePlayerId ? 'b' : 'w';
+        const joinerSeat = joinerColor === 'w' ? 'bottom' : 'top';
+        client.send('tournament_seated', { boardId, color: joinerColor, seat: joinerSeat });
+
+        // Also confirm the first player (challenger) with tournament_seated
+        const challengerSession = this.findSessionByPlayerId(board.waitingPlayerId);
+        if (challengerSession) {
+          const challengerClient = this.clients.find(c => c.sessionId === challengerSession);
+          const challengerColor = board.whitePlayerId === board.waitingPlayerId ? 'w' : 'b';
+          const challengerSeat = challengerColor === 'w' ? 'bottom' : 'top';
+          challengerClient?.send('tournament_seated', { boardId, color: challengerColor, seat: challengerSeat });
+        }
+
         this.startMatch(board, player, client);
         return;
       }
@@ -463,6 +487,7 @@ export class WorldRoom extends Room<WorldState> {
         }
       });
 
+      const abandonedMatches: MatchState[] = [];
       this.state.matches.forEach((match, matchId) => {
         if (match.status === 'playing') {
           const isWhite = match.whitePlayerId === player.id;
@@ -474,9 +499,14 @@ export class WorldRoom extends Room<WorldState> {
             activeGames.delete(matchId);
             this.broadcastMatchEnd(match);
             this.cleanupMatchBoard(match);
+            abandonedMatches.push(match);
           }
         }
       });
+
+      for (const match of abandonedMatches) {
+        await this.reportTournamentResult(match);
+      }
 
       this.state.voiceParticipants.delete(client.sessionId);
       this.state.players.delete(client.sessionId);
@@ -501,6 +531,7 @@ export class WorldRoom extends Room<WorldState> {
 
   private tick() {
     const now = Date.now();
+    const timedOutMatches: MatchState[] = [];
     this.state.matches.forEach((match, matchId) => {
       if (match.status !== 'playing') return;
 
@@ -514,6 +545,7 @@ export class WorldRoom extends Room<WorldState> {
           activeGames.delete(matchId);
           this.broadcastMatchEnd(match);
           this.cleanupMatchBoard(match);
+          timedOutMatches.push(match);
         }
       } else {
         if (match.blackTimeMs - elapsed <= 0) {
@@ -524,9 +556,13 @@ export class WorldRoom extends Room<WorldState> {
           activeGames.delete(matchId);
           this.broadcastMatchEnd(match);
           this.cleanupMatchBoard(match);
+          timedOutMatches.push(match);
         }
       }
     });
+    for (const match of timedOutMatches) {
+      this.reportTournamentResult(match);
+    }
   }
 
   private resetBoard(board: BoardState) {
@@ -563,7 +599,6 @@ export class WorldRoom extends Room<WorldState> {
       result: match.result,
       winnerId: match.winnerId,
     });
-    this.reportTournamentResult(match);
   }
 
   private async reportTournamentResult(match: MatchState) {
@@ -620,7 +655,7 @@ export class WorldRoom extends Room<WorldState> {
         whiteTimeMs: match.whiteTimeMs,
         blackTimeMs: match.blackTimeMs,
       };
-      coordinator.finishTournamentMatch(finishParams);
+      coordinator.finishTournamentMatch(finishParams).catch(() => {});
 
       // Update player profile stats (wins/losses/draws/rating)
       if (reported && pairing.whitePlayerId && pairing.blackPlayerId) {
@@ -746,7 +781,7 @@ export class WorldRoom extends Room<WorldState> {
     console.log(`[WorldRoom] Match started: ${matchId} (${whitePlayerName} vs ${blackPlayerName}) on ${board.name}`);
   }
 
-  private endMatch(matchId: string, game: Chess) {
+  private async endMatch(matchId: string, game: Chess) {
     const match = this.state.matches.get(matchId);
     if (!match) return;
 
@@ -768,6 +803,7 @@ export class WorldRoom extends Room<WorldState> {
 
     this.broadcastMatchEnd(match);
     this.cleanupMatchBoard(match);
+    await this.reportTournamentResult(match);
   }
 
   private getSpectators(boardId: string): Set<string> {

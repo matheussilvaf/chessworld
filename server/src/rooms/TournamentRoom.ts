@@ -272,12 +272,17 @@ export class TournamentRoom extends Room<TournamentArenaState> {
         this.state.totalRounds = current.totalRounds;
         this.state.playerCount = current.playerCount;
 
-        const isActive = ['starting', 'round_active', 'between_rounds', 'finalizing'].includes(current.status);
-        this.state.practiceTablesLocked = isActive;
-        this.state.doorOpen = isActive && !!current.arenaLayout;
+        const isArenaVisible = current.status === 'round_active' || current.status === 'between_rounds';
+        this.state.practiceTablesLocked = ['starting', 'round_active', 'between_rounds', 'finalizing'].includes(current.status);
 
-        if (current.arenaLayout) {
+        if (isArenaVisible && current.arenaLayout) {
+          this.state.doorOpen = true;
           this.syncModules(current.arenaLayout);
+        } else {
+          this.state.doorOpen = false;
+          this.state.modules.clear();
+          this.state.tables.clear();
+          (this as any)._lastModuleSig = '';
         }
 
         const regs = await coordinator.getRegistrations(current.id);
@@ -345,7 +350,11 @@ export class TournamentRoom extends Room<TournamentArenaState> {
   }
 
   private syncModules(layout: coordinator.ArenaLayout): void {
-    if (this.state.modules.length === layout.modules.length) return;
+    const sig = layout.modules.map(m => `${m.instanceId}:${m.type}:${m.order}`).join('|')
+      + '||' + layout.tables.map(t => `${t.runtimeTableId}:${t.tableNumber}:${t.moduleInstanceId}:${t.localSlotId}`).join('|');
+
+    if ((this as any)._lastModuleSig === sig) return;
+    (this as any)._lastModuleSig = sig;
 
     this.state.modules.clear();
     for (const mod of layout.modules) {

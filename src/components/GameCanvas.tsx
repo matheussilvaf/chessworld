@@ -15,6 +15,7 @@ import {
   registerBoards,
   sendMovement,
 } from '../game/network/colyseusClient';
+import { seatTournamentPlayerWhenReady } from '../game/tournamentSeatClient';
 import { useColyseusStore } from '../hooks/useColyseusConnection';
 import { loadCharacterConfigs } from '../config/loadCharacterConfigs';
 import type { WorldScene } from '../game/scenes/WorldScene';
@@ -454,14 +455,16 @@ export function GameCanvas() {
 
       useChessStore.getState().openMatch(data.matchId, data.color, userId, data.boardId);
 
-      if (gameRef.current) {
-        const worldScene = getWorldScene(gameRef.current);
-        if (worldScene && data.boardId) {
-          const seat = data.color === 'w' ? 'bottom' : 'top';
-          worldScene.seatPlayer(data.boardId, 'player', seat, data.color);
-          const initialFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-          worldScene.updateBoardFEN(data.boardId, initialFen);
-          worldScene.activateOverlayInteraction(data.boardId, data.color);
+      if (data.boardId) {
+        const seat = data.color === 'w' ? 'bottom' : 'top';
+        seatTournamentPlayerWhenReady(data.boardId, seat, data.color);
+        if (gameRef.current) {
+          const worldScene = getWorldScene(gameRef.current);
+          if (worldScene) {
+            const initialFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+            worldScene.updateBoardFEN(data.boardId, initialFen);
+            worldScene.activateOverlayInteraction(data.boardId, data.color);
+          }
         }
       }
     });

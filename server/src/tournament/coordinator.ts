@@ -324,71 +324,7 @@ async function transitionToRoundActive(instance: TournamentInstance): Promise<vo
 }
 
 async function checkRoundCompletion(instance: TournamentInstance): Promise<void> {
-  const db = getClient();
-
-  const { data: pairings } = await db
-    .from('tournament_pairings')
-    .select('*')
-    .eq('tournament_id', instance.id)
-    .eq('round_number', instance.currentRound);
-
-  if (!pairings || pairings.length === 0) return;
-
-  const allComplete = pairings.every((p: any) => p.result !== null);
-  if (!allComplete) return;
-
-  if (!instance.swissTournamentId) return;
-  const swissT = await service.getTournament(instance.swissTournamentId);
-  if (!swissT) return;
-
-  for (const p of pairings) {
-    if (p.is_bye) continue;
-    if (!p.result) continue;
-
-    const round = swissT.rounds.find(r => r.number === instance.currentRound);
-    if (!round) continue;
-
-    const pairing = round.pairings.find(pr => pr.board === p.board_number);
-    if (!pairing || pairing.result) continue;
-
-    const isPlayed = !['forfeit', 'bye'].includes(p.result_reason || '');
-    await service.setResult(
-      instance.swissTournamentId,
-      instance.currentRound,
-      p.board_number,
-      p.result as GameResult,
-      isPlayed,
-    );
-  }
-
-  const finalizeResult = await service.finalizeRound(instance.swissTournamentId, instance.currentRound);
-  if (!finalizeResult.success) {
-    console.error('[Coordinator] Finalize round failed:', finalizeResult.error);
-    return;
-  }
-
-  await saveStandings(instance.id, instance.swissTournamentId);
-
-  const { data: roundRow } = await db
-    .from('tournament_rounds')
-    .select('id')
-    .eq('tournament_id', instance.id)
-    .eq('round_number', instance.currentRound)
-    .maybeSingle();
-
-  if (roundRow) {
-    await db
-      .from('tournament_rounds')
-      .update({ status: 'completed', completed_at: new Date().toISOString() })
-      .eq('id', roundRow.id);
-  }
-
-  const swissT2 = await service.getTournament(instance.swissTournamentId);
-  if (swissT2 && swissT2.status === 'finished') {
-    await atomicTransition(instance.id, 'round_active', 'finalizing');
-  } else {
-    await atomicTransition(instance.id, 'round_active', 'between_rounds');
-  }
+  await lockedAdvanceRound(instance.id);
 }
 
 async function checkPresenceDeadlines(instance: TournamentInstance): Promise<void> {
@@ -406,10 +342,11 @@ async function checkPresenceDeadlines(instance: TournamentInstance): Promise<voi
 
   if (!expired || expired.length === 0) return;
 
+  let anyUpdated = false;
+
   for (const p of expired) {
     if (p.is_bye || p.result) continue;
 
-    // If the match is already playing on the WorldRoom board, clear deadline instead of forfeiting
     const worldRoom = getWorldRoomInstance();
     if (worldRoom && p.runtime_table_id && worldRoom.isBoardPlaying(p.runtime_table_id)) {
       await db
@@ -427,7 +364,6 @@ async function checkPresenceDeadlines(instance: TournamentInstance): Promise<voi
     const blackPresent = p.black_player_id && await isPlayerPresent(p.black_player_id);
 
     if (whitePresent && blackPresent) {
-      // Both present and playing - clear the deadline
       await db
         .from('tournament_pairings')
         .update({ presence_deadline: null })
@@ -458,12 +394,11 @@ async function checkPresenceDeadlines(instance: TournamentInstance): Promise<voi
       .maybeSingle();
 
     console.log(`[Coordinator] Forfeit on board ${p.board_number}: ${result}`);
+    if (updated) anyUpdated = true;
+  }
 
-    if (updated) {
-      tryAdvanceRound(instance.id).catch(err =>
-        console.error('[Coordinator] tryAdvanceRound error after forfeit:', err.message)
-      );
-    }
+  if (anyUpdated) {
+    await lockedAdvanceRound(instance.id);
   }
 }
 
@@ -1083,6 +1018,26 @@ export async function getStandings(tournamentId: string): Promise<any[]> {
   return data || [];
 }
 
+const advanceLocks = new Map<string, Promise<void>>();
+
+async function lockedAdvanceRound(tournamentId: string): Promise<void> {
+  const existing = advanceLocks.get(tournamentId);
+  if (existing) await existing;
+
+  const p = (async () => {
+    try {
+      await tryAdvanceRound(tournamentId);
+      await notifyRoomSync();
+    } catch (err: any) {
+      console.error('[Coordinator] lockedAdvanceRound error:', err.message);
+    } finally {
+      advanceLocks.delete(tournamentId);
+    }
+  })();
+  advanceLocks.set(tournamentId, p);
+  await p;
+}
+
 export async function reportMatchResult(
   tournamentId: string,
   roundNumber: number,
@@ -1092,7 +1047,7 @@ export async function reportMatchResult(
 ): Promise<boolean> {
   const db = getClient();
 
-  const { data, error } = await db
+  const { data } = await db
     .from('tournament_pairings')
     .update({
       result,
@@ -1108,9 +1063,7 @@ export async function reportMatchResult(
     .maybeSingle();
 
   if (data) {
-    tryAdvanceRound(tournamentId).catch(err =>
-      console.error('[Coordinator] tryAdvanceRound error after reportMatchResult:', err.message)
-    );
+    await lockedAdvanceRound(tournamentId);
   }
 
   return !!data;
